@@ -19,6 +19,7 @@
 #include "gfx_wsys.h"
 #include "input.h"
 #include "input_win.h"
+#include "keys.h"
 #include "nvn_api.h"
 #include "ui/menu.h"
 #include "vk.h"
@@ -34,6 +35,18 @@ static int g_fs_pending;                   // window thread: TOTK_FULLSCREEN wai
 static volatile int32_t g_dpi = USER_DEFAULT_SCREEN_DPI;   // the window's DPI, set by the window thread
 
 HWND gfx_window_handle(void) { return g_hwnd; }
+
+// fastball: keys.h. Any window of this process in front counts (the settings menu's, a message box's), as hid.c and
+// the diagnostic keys did before this seam existed.
+int wsys_focused(void) {
+    HWND fg = GetForegroundWindow();
+    DWORD pid = 0;
+    if (fg) GetWindowThreadProcessId(fg, &pid);
+    return fg && pid == GetCurrentProcessId();
+}
+int wsys_key_down(int key) { return (GetAsyncKeyState(key) & 0x8000) != 0; }
+int wsys_key_held(int key) { return wsys_focused() && wsys_key_down(key); }
+int wsys_key_tapped(int key) { return wsys_focused() && (GetAsyncKeyState(key) & 0x8001) != 0; }
 
 int gfx_window_vk_extensions(const char **out, int max) {
     if (max < 2) return 0;

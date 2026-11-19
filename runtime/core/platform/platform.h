@@ -261,6 +261,9 @@ void plat_fatal_notice(const char *what);
 // a file, a console build). 1 when the text can be seen; 0 when there is nowhere to write (started from Explorer).
 int plat_console_attach(void);
 void plat_message(const char *title, const char *text);   // a message box (UTF-8), for a windowed program's errors
+void plat_beep(void);   // fastball: the system's default sound, asynchronous (a diagnostic key's feedback); may do nothing
+// fastball: a graphics debugger is in the process (RenderDoc's renderdoc.dll / librenderdoc.so was injected)
+int plat_renderdoc_loaded(void);
 int plat_setenv(const char *name, const char *value);    // value NULL removes it; 1 on success
 uint32_t plat_process_id(void);
 // CPU time of the process since it started (user and kernel), and wall time since it started, in ns; 0 when unknown.

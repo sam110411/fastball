@@ -179,7 +179,7 @@ static void out_open(void) {
         return;
     }
     out.device_ok = 1;
-    rt_log("audout: WASAPI device '%s' opened, %d Hz stereo signed 16-bit in, float out, device period %d frames",
+    rt_log("audout: output device '%s' opened, %d Hz stereo signed 16-bit in, float out, device period %d frames",
            name, AUDOUT_RATE, period);
 }
 

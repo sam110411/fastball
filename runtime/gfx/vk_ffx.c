@@ -25,6 +25,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+// AMD ships the runtime for Windows only: on Linux its DLLs are never found and the menu shows FSR 3.1 / 4 as
+// unavailable. The API header's __declspec(dllexport) then has no meaning.
+#ifndef _WIN32
+#define __declspec(x)
+#endif
 
 #include "cfg.h"
 #include "host.h"

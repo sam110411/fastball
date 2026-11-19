@@ -4,8 +4,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 #include <string.h>
 
 #include "cfg.h"
@@ -13,6 +15,8 @@
 #include "gfx.h"
 #include "host.h"
 #include "input.h"
+#include "keys.h"
+#include "platform/platform.h"
 #include "ui/menu.h"
 #include "vk.h"
 #include "vk_dlaa.h"
@@ -173,6 +177,17 @@ void gfx_capture_arm(long ahead) {
     __atomic_store_n(&capture_at, f, __ATOMIC_RELAXED);
     rt_log("capture: frame %ld", f);
 }
+// Free commit (RAM plus page file) and RAM, GiB, for the RenderDoc notes below; 0 where unknown.
+static void commit_free(double *free, double *total, double *ram) {
+    *free = *total = *ram = 0;
+#ifdef _WIN32
+    MEMORYSTATUSEX ms = {.dwLength = sizeof ms};
+    if (!GlobalMemoryStatusEx(&ms)) return;
+    *free = (double)ms.ullAvailPageFile / 1073741824.0, *total = (double)ms.ullTotalPageFile / 1073741824.0;
+    *ram = (double)ms.ullAvailPhys / 1073741824.0;
+#endif
+}
+
 // Called by ui/menu.cpp menu_overlay_frame at every present: sets *shot when this frame's picture is to be saved.
 int mlb_capture_tick(uint64_t frame, const char **shot) {
     static char path[1100];
@@ -182,33 +197,27 @@ int mlb_capture_tick(uint64_t frame, const char **shot) {
     // key), and the capture writes every render target as a PNG and the frame's draws into mlb.log: a long stall.
     static int key;
     if (!key) {
-        key = GetModuleHandleA("renderdoc.dll") ? VK_F9 : cfg_int("CAPTURE_KEY") ? VK_F12 : -1;
-        if (key == VK_F9) {
+        key = plat_renderdoc_loaded() ? KEY_F9 : cfg_int("CAPTURE_KEY") ? KEY_F12 : -1;
+        if (key == KEY_F9) {
             // A RenderDoc capture copies every dirty resource and keeps two copies of each mapped range in system
             // memory: several GiB of commit on top of the game's. Short of it, RenderDoc's allocations fail and it
             // crashes in the capture (seen with a 1 GiB page file: "Allocation for 89128960 bytes failed").
-            MEMORYSTATUSEX ms = {.dwLength = sizeof ms};
-            GlobalMemoryStatusEx(&ms);
+            double fr, tot, ram;
+            commit_free(&fr, &tot, &ram);
             rt_log("capture: RenderDoc is loaded: F12 is its capture, ours (draw log, render targets) is F9; commit free "
-                   "%.1f of %.1f GiB%s", (double)ms.ullAvailPageFile / 1073741824.0, (double)ms.ullTotalPageFile / 1073741824.0,
-                   ms.ullAvailPageFile < (12ull << 30) ? " (low: a capture may run out of memory and crash; raise the page file)" : "");
+                   "%.1f of %.1f GiB%s", fr, tot,
+                   tot > 0 && fr < 12 ? " (low: a capture may run out of memory and crash; raise the page file)" : "");
         }
     }
-    DWORD pid = 0;
-    if (key > 0) {
-        HWND fg = GetForegroundWindow();
-        if (fg) GetWindowThreadProcessId(fg, &pid);
-    }
-    int f12 = key > 0 && pid == GetCurrentProcessId() && (GetAsyncKeyState(key) & 0x8001);
-    if (key == VK_F9) {   // RenderDoc's F12: the free commit at the press (a capture short of it crashes in renderdoc.dll)
+    int f12 = key > 0 && wsys_key_tapped(key);   // nothing is asked of the window system without a capture key
+    if (key == KEY_F9) {   // RenderDoc's F12: the free commit at the press (a capture short of it crashes in renderdoc.dll)
         static int rd_was;
-        int rd = pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_F12) & 0x8001);
+        int rd = wsys_key_tapped(KEY_F12);
         if (rd && !rd_was) {
-            MEMORYSTATUSEX ms = {.dwLength = sizeof ms};
-            GlobalMemoryStatusEx(&ms);
+            double fr, tot, ram;
+            commit_free(&fr, &tot, &ram);
             rt_log("capture: RenderDoc capture at frame %llu: commit free %.1f of %.1f GiB, RAM free %.1f GiB",
-                   (unsigned long long)frame, (double)ms.ullAvailPageFile / 1073741824.0,
-                   (double)ms.ullTotalPageFile / 1073741824.0, (double)ms.ullAvailPhys / 1073741824.0);
+                   (unsigned long long)frame, fr, tot, ram);
         }
         rd_was = rd != 0;
     }
@@ -219,7 +228,7 @@ int mlb_capture_tick(uint64_t frame, const char **shot) {
     if ((long)frame == __atomic_load_n(&capture_at, __ATOMIC_RELAXED)) {
         snprintf(path, sizeof path, "%s/shot-%llu.png", rt_config()->profile, (unsigned long long)frame);
         *shot = path;
-        MessageBeep(0xFFFFFFFFu);   // the capture is being taken: a beep tells the player (asynchronous)
+        plat_beep();   // the capture is being taken: a beep tells the player (asynchronous)
     }
     const char *list = cfg_get("MLB_SHOT");
     for (const char *q = list; q && *q;) {
@@ -235,7 +244,9 @@ int mlb_capture_tick(uint64_t frame, const char **shot) {
     }
     return 0;
 }
+#ifdef _WIN32
 int input_window_msg(HWND h, UINT m, WPARAM w, LPARAM l, LRESULT *res) { (void)h, (void)m, (void)w, (void)l, (void)res; return 0; }
+#endif
 void input_cursor_suspend(int on) { (void)on; }
 
 // ---- boot.c --frames: every present lands here; log the first and then every 600th

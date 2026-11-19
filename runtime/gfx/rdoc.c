@@ -15,6 +15,7 @@
 
 #include "cfg.h"
 #include "host.h"
+#include "keys.h"
 #include "vk.h"
 #include "renderdoc_app.h"
 
@@ -45,10 +46,7 @@ int rdoc_active(void) { return api != NULL; }
 
 static int f12_pressed(void) {
     static int was;
-    HWND fg = GetForegroundWindow();
-    DWORD pid = 0;
-    if (fg) GetWindowThreadProcessId(fg, &pid);
-    int down = pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_F12) & 0x8000);
+    int down = wsys_key_held(KEY_F12);
     int edge = down && !was;
     was = down;
     return edge;

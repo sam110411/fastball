@@ -3,23 +3,19 @@
 // compared offline to find the game's own variables that tell them apart (the controller face-button mode, hid.c).
 // Only with MLB_STATEDUMP=1: a player's report (0.1.3, RTTS batting) showed F8 pressed three times by mistake, each a
 // beep, a 42 MB file in their profile folder and an 88 ms frame. Off, it costs one int test per presented frame.
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include <stdint.h>
 #include <stdio.h>
 
 #include "cfg.h"
 #include "host.h"
+#include "keys.h"
+#include "platform/platform.h"
 
 void mlb_state_dump_tick(uint64_t frame) {
     static int on = -1, was;
     if (on < 0) on = cfg_int("STATEDUMP") != 0;
     if (!on) return;
-    HWND fg = GetForegroundWindow();
-    DWORD pid = 0;
-    if (fg) GetWindowThreadProcessId(fg, &pid);
-    int down = pid == GetCurrentProcessId() && (GetAsyncKeyState(VK_F8) & 0x8000);
+    int down = wsys_key_held(KEY_F8);
     if (!down || was) {
         was = down;
         return;
@@ -41,7 +37,7 @@ void mlb_state_dump_tick(uint64_t frame) {
         written += fwrite(p, 1, 4096, f);
     }
     fclose(f);
-    MessageBeep(0xFFFFFFFFu);
+    plat_beep();
     rt_log("statedump: frame %llu: main+%#llx..+%#llx (%llu KiB) to %s", (unsigned long long)frame,
            (unsigned long long)m->data_off, (unsigned long long)m->size, (unsigned long long)(written >> 10), path);
 }

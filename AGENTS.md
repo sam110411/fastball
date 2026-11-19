@@ -60,6 +60,9 @@ First-time setup (only for a fresh checkout): see `docs/runtime-port.md`. In sho
 `mlb.exe` is locked while the game runs: the link fails then, so check `tasklist` first.
 Upscalers: `MLB_DLSS` needs `nvngx_dlss.dll` and `MLB_FSR` (FSR 3.1 / 4, `vk_ffx.c`) AMD's two DLLs next to `mlb.exe`;
 `tools/fetch_ffx.py` puts AMD's into `work/build`. Both are off by default and turned on in the F1 menu (Graphics).
+Linux (work in progress, `docs/linux.md`): `tools/build.py` run on Linux builds `mlb` from the `*_sdl.*` and
+`platform/linux.c` files instead of the Win32 ones. Code that polls keys goes through `runtime/gfx/keys.h`, not
+`GetAsyncKeyState`; anything Win32 in shared files stays behind `#ifdef _WIN32` or a `platform.h` call.
 
 Settings: `work/build/mlb.cfg`, one `KEY=VALUE` per line. Environment variables `MLB_<KEY>` (or `TOTK_<KEY>`) override
 it. The full list is the table in `runtime/mlb/cfg.c`; `main.c` turns `FRAME_QUEUE` and `REPLAY_ASYNC` on by default.

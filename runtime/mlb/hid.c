@@ -24,15 +24,19 @@
 //     north (a throw to first on Xbox A, power swing on Xbox Y). Triggers past half way are ZL/ZR; View / Share /
 //     Create and the PlayStation touchpad click are -, Menu / Options are +. The guide button (Xbox, PS) opens the
 //     settings menu.
-//   - the keyboard, while a window of this process is in the foreground (GetAsyncKeyState):
+//   - the keyboard, while a window of this process is in the foreground (keys.h: GetAsyncKeyState on Windows, SDL's
+//     keyboard state with the SDL window):
 //       left stick W A S D, right stick I J K L, d-pad arrow keys, A Enter or Space, B Escape or Backspace, X R, Y F,
 //       L Q, R E, ZL 1, ZR 3, + Tab, - M, left stick click C, right stick click V.
 // Vibration plays on every pad's motors (MLB_RUMBLE=0: off): the low band's amplitude on the left (heavy) motor, the
 // high band's on the right, times MLB_RUMBLE_STRENGTH percent. The sticks get a radial dead zone
 // (MLB_LSTICK_DEADZONE / MLB_RSTICK_DEADZONE, else MLB_STICK_DEADZONE, percent; the settings menu's Controls tab).
 // Nothing here allocates guest memory or calls back into the guest.
+// On Linux SDL3 is linked (libSDL3.so.0, which the window uses too) and there is no XInput.
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#endif
 
 #include <math.h>
 #include <stdint.h>
@@ -42,6 +46,7 @@
 
 #include "cfg.h"
 #include "host.h"
+#include "keys.h"
 #include "platform/platform.h"
 #include "prompts.h"
 #include "swkbd.h"
@@ -75,18 +80,27 @@ static uint32_t supported_styles = STYLE_FULL_KEY;
 typedef struct { uint16_t buttons; uint8_t lt, rt; int16_t lx, ly, rx, ry; } XPad;
 typedef struct { uint32_t packet; XPad pad; } XState;
 typedef struct { uint16_t left, right; } XVibration;
+#ifdef _WIN32
 static DWORD(WINAPI *x_get)(DWORD, XState *);
 static DWORD(WINAPI *x_set)(DWORD, XVibration *);
+#else
+#define ERROR_SUCCESS 0
+static uint32_t (*x_get)(uint32_t, XState *);   // no XInput: stays NULL
+static uint32_t (*x_set)(uint32_t, XVibration *);
+typedef uint32_t DWORD;
+#endif
 static PlatOnce xinput_once = PLAT_ONCE_INIT;
 
 static void xinput_load(void *arg) {
     (void)arg;
+#ifdef _WIN32
     HMODULE m = LoadLibraryA("xinput1_4.dll");
     if (!m) m = LoadLibraryA("xinput9_1_0.dll");
     if (m) {
         x_get = (DWORD(WINAPI *)(DWORD, XState *))(void *)GetProcAddress(m, "XInputGetState");
         x_set = (DWORD(WINAPI *)(DWORD, XVibration *))(void *)GetProcAddress(m, "XInputSetState");
     }
+#endif
     rt_log("hid: XInput %s; keyboard while the game window has focus", x_get ? "loaded" : "not available");
 }
 
@@ -150,14 +164,7 @@ static void dead_zone(int32_t *x, int32_t *y, double dz) {
     *y = clamp_stick((int32_t)lrint(fy * s * STICK_MAX));
 }
 
-static int window_focused(void) {
-    HWND w = GetForegroundWindow();
-    DWORD pid = 0;
-    if (w) GetWindowThreadProcessId(w, &pid);
-    return w && pid == GetCurrentProcessId();
-}
-
-static int key(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
+static int key(int vk) { return wsys_key_down(vk); }   // after one wsys_focused check (poll)
 
 // ---- face buttons (MLB_PAD_MAP)
 // The pads' face buttons in place order: south, east, west, north. By position they are Switch B, A, Y, X, where
@@ -302,6 +309,7 @@ static void sdl_load(void *arg) {
         rt_log("hid: MLB_PAD_DRIVER=xinput: Xbox pads through XInput only");
         return;
     }
+#ifdef _WIN32
     wchar_t path[MAX_PATH + 16];
     DWORD n = GetModuleFileNameW(NULL, path, MAX_PATH);
     while (n && path[n - 1] != L'\\' && path[n - 1] != L'/') n--;
@@ -321,6 +329,11 @@ static void sdl_load(void *arg) {
         rt_log("hid: SDL3.dll lacks a function this port needs: XInput only");
         return;
     }
+#else
+#define SDL_GET(f) p_##f = f;
+    SDL_FNS(SDL_GET)
+#undef SDL_GET
+#endif
     // No SDL window: the pads count whichever window is in front, as XInput did (the keyboard keeps its focus check).
     p_SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     if (!p_SDL_Init(SDL_INIT_GAMEPAD)) {
@@ -551,11 +564,11 @@ static void poll(NpadState *st) {
         dead_zone(&lx, &ly, dz_l);
         dead_zone(&rx, &ry, dz_r);
     }
-    if (window_focused()) {
+    if (wsys_focused()) {
         static const struct { int vk, bit; } keys[] = {
-            {VK_RETURN, B_A}, {VK_SPACE, B_A}, {VK_ESCAPE, B_B}, {VK_BACK, B_B}, {'R', B_X}, {'F', B_Y}, {'Q', B_L},
-            {'E', B_R}, {'1', B_ZL}, {'3', B_ZR}, {VK_TAB, B_PLUS}, {'M', B_MINUS}, {'C', B_LSTICK}, {'V', B_RSTICK},
-            {VK_LEFT, B_LEFT}, {VK_UP, B_UP}, {VK_RIGHT, B_RIGHT}, {VK_DOWN, B_DOWN},
+            {KEY_RETURN, B_A}, {KEY_SPACE, B_A}, {KEY_ESCAPE, B_B}, {KEY_BACK, B_B}, {'R', B_X}, {'F', B_Y}, {'Q', B_L},
+            {'E', B_R}, {'1', B_ZL}, {'3', B_ZR}, {KEY_TAB, B_PLUS}, {'M', B_MINUS}, {'C', B_LSTICK}, {'V', B_RSTICK},
+            {KEY_LEFT, B_LEFT}, {KEY_UP, B_UP}, {KEY_RIGHT, B_RIGHT}, {KEY_DOWN, B_DOWN},
         };
         for (size_t i = 0; i < sizeof keys / sizeof *keys; i++)
             if (key(keys[i].vk)) b |= BIT(keys[i].bit);

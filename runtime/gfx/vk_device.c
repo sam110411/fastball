@@ -7,8 +7,9 @@
 #include <stdlib.h>
 #include <string.h>
 #ifdef _WIN32
-#include <windows.h>   // GetModuleHandleA (vk_debug_names_on)
 #define strncasecmp _strnicmp   // fastball: the MSVC C library names it so
+#else
+#include <strings.h>
 #endif
 
 #include "cfg.h"
@@ -633,11 +634,7 @@ static PFN_vkSetDebugUtilsObjectNameEXT p_set_name;
 int vk_debug_names_on(void) {
     static int on = -1;
     if (on < 0) {
-#ifdef _WIN32
-        on = GetModuleHandleA("renderdoc.dll") != NULL && g_ready;
-#else
-        on = 0;
-#endif
+        on = plat_renderdoc_loaded() && g_ready;
         if (on) p_set_name = (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(g_vk.device, "vkSetDebugUtilsObjectNameEXT");
         if (on && !p_set_name) on = 0;
         if (on) rt_log("vk: RenderDoc: images and pools are named with their guest address");

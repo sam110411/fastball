@@ -221,7 +221,7 @@ static void output_open(Mixer *m, int rate) {
     if (m->target > RING_FRAMES / 2) m->target = RING_FRAMES / 2;
     uint64_t period_ns = (uint64_t)period * 1000000000ull / (uint64_t)rate;
     m->stall_ns = 4 * period_ns > STALL_MS * 1000000ull ? 4 * period_ns : STALL_MS * 1000000ull;
-    rt_log("audio: WASAPI device '%s' opened, %d Hz %s float, prefill %d ms, device period %d frames; "
+    rt_log("audio: output device '%s' opened, %d Hz %s float, prefill %d ms, device period %d frames; "
            "the device paces rendering at %.1f ms queued", name, rate, m->channels == 6 ? "5.1" : "stereo",
            m->prefill * 5, period, m->target * 1000.0 / rate);
 }

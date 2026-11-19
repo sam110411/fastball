@@ -1052,7 +1052,7 @@ static uint32_t open_file(uint64_t *out, const char *path, int mode) {
     plat_mutex_lock(&lock);
     for (int i = 0; i < NFILES; i++)
         if (!files[i].h) {
-            files[i] = (File){f, mode, save_writer, (rt_trace & RT_TRACE_FS) && path ? _strdup(path) : NULL, 0, 0};
+            files[i] = (File){f, mode, save_writer, (rt_trace & RT_TRACE_FS) && path ? strdup(path) : NULL, 0, 0};
             *out = FILE_BASE + (uint64_t)i;
             plat_mutex_unlock(&lock);
             if (save_writer) {

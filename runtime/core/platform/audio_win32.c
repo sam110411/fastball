@@ -170,7 +170,7 @@ AudioOut *audio_out_open(int rate, int channels, AudioPullFn pull, void *user, i
         WaitForSingleObject(o->ready, INFINITE);
         if (o->ok) {
             *period = o->period;
-            snprintf(name, nname, "%s", o->name);
+            snprintf(name, nname, "%s (WASAPI)", o->name);
             return o;
         }
         snprintf(err, nerr, "%s", o->err);

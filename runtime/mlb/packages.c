@@ -23,8 +23,52 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef _WIN32
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#define SEND_FLAGS 0
+#define PATH_SEP "\\"
+#define BUNDLED_PYTHON "\\packages\\python\\python.exe"
+#else
+// BSD sockets under Winsock's names, so the code below is the same on both. Winsock numbers its socket options as BSD
+// does (and as nn::socket does); Linux has its own (ov_setsockopt).
+#include <arpa/inet.h>
+#include <errno.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
+#include <strings.h>
+#include <sys/ioctl.h>
+#include <sys/select.h>
+#include <sys/socket.h>
+#include <unistd.h>
+typedef int SOCKET;
+typedef unsigned long u_long;
+typedef unsigned long ULONG;
+typedef uint32_t DWORD;
+typedef struct pollfd WSAPOLLFD;
+#define INVALID_SOCKET (-1)
+#define INFINITE 0xFFFFFFFFu
+#define closesocket close
+#define ioctlsocket ioctl
+#define WSAPoll poll
+#define WSAGetLastError() errno
+#define WSAEWOULDBLOCK EWOULDBLOCK
+#define WSAEINPROGRESS EINPROGRESS
+#define WSAEALREADY EALREADY
+#define WSAECONNREFUSED ECONNREFUSED
+#define WSAECONNRESET ECONNRESET
+#define WSAECONNABORTED ECONNABORTED
+#define WSAENOTCONN ENOTCONN
+#define WSAETIMEDOUT ETIMEDOUT
+#define WSAEBADF EBADF
+#define WSAENOTSOCK ENOTSOCK
+#define _stricmp strcasecmp
+#define Sleep(ms) plat_sleep_ms(ms)
+#define SEND_FLAGS MSG_NOSIGNAL   // a closed peer is an error return, not SIGPIPE
+#define PATH_SEP "/"
+#define BUNDLED_PYTHON "/packages/python/bin/python3"
+#endif
 
 #include "cfg.h"
 #include "host.h"
@@ -81,8 +125,11 @@ static int server_start(void) {
     // The setup puts a Python of its own next to the server. MLB_PACKAGES_PYTHON names another one (a checkout's).
     const char *other = cfg_get("MLB_PACKAGES_PYTHON");
     if (other && *other) snprintf(python, sizeof python, "%s", other);
-    else snprintf(python, sizeof python, "%s\\packages\\python\\python.exe", dir);
-    snprintf(script, sizeof script, "%s\\packages\\server.py", dir);
+    else snprintf(python, sizeof python, "%s" BUNDLED_PYTHON, dir);
+#ifndef _WIN32
+    if (!(other && *other) && !plat_file_exists(python)) snprintf(python, sizeof python, "/usr/bin/python3");
+#endif
+    snprintf(script, sizeof script, "%s" PATH_SEP "packages" PATH_SEP "server.py", dir);
     if (!plat_file_exists(python) || !plat_file_exists(script)) {
         rt_log("packages: MLB_OFFLINE_PACKAGES is on but %s is missing; the game stays offline (the setup's "
                "\"Road to the Show packages\" option puts it there)", plat_file_exists(python) ? script : python);
@@ -100,11 +147,11 @@ static int server_start(void) {
     // for the player's packs and the certificate, and its log. Then "start".
     const RtConfig *rc = rt_config();
     const char *log_path = rt_log_path();
-    snprintf(data, sizeof data, "%s\\offline-packages", rc->profile);
-    snprintf(cert_path, sizeof cert_path, "%s\\cert.pem", data);
+    snprintf(data, sizeof data, "%s" PATH_SEP "offline-packages", rc->profile);
+    snprintf(cert_path, sizeof cert_path, "%s" PATH_SEP "cert.pem", data);
     if (log_path && plat_last_sep(log_path))
-        snprintf(logf, sizeof logf, "%.*s\\packages-server.log", (int)(plat_last_sep(log_path) - log_path), log_path);
-    else snprintf(logf, sizeof logf, "%s\\server.log", data);
+        snprintf(logf, sizeof logf, "%.*s" PATH_SEP "packages-server.log", (int)(plat_last_sep(log_path) - log_path), log_path);
+    else snprintf(logf, sizeof logf, "%s" PATH_SEP "server.log", data);
     int n = snprintf(conf, sizeof conf, "romfs %s\ndata %s\nlog %s\nstart\n", rc->romfs, data, logf);
     plat_event_init(&ready.done, 1, 0);
     if (!plat_child_write(child, conf, (size_t)n) || !plat_thread_spawn(read_ready, child, "packages server", 0)) {
@@ -328,7 +375,7 @@ static void ov_send(Cpu *c) {   // ssize_t Send(int, const void *, size_t, MsgFl
     long n = (long)arg_x(c, 2);
     Sock *k = get((int)arg_x(c, 0));
     if (!k) { ret_x(c, (uint64_t)(int64_t)fail(E_BADF)); return; }
-    long r = send(k->s, (const char *)p, (int)n, 0);
+    long r = send(k->s, (const char *)p, (int)n, SEND_FLAGS);
     if (r < 0) r = fail(from_wsa(WSAGetLastError()));
     ret_x(c, (uint64_t)(int64_t)r);
 }
@@ -398,14 +445,20 @@ static void ov_select(Cpu *c) {
     }
     struct timeval t = {0, 0};
     if (tv) { t.tv_sec = (long)tv[0]; t.tv_usec = (long)tv[1]; }
-    int r, any = ws[0].fd_count + ws[1].fd_count + ws[2].fd_count;
+    int r, any = 0;
+    SOCKET top = 0;   // POSIX select takes the highest descriptor plus one; Winsock ignores it
+    for (int i = 0; i < NFD; i++)
+        if (socks[i].used && (FD_ISSET(socks[i].s, &ws[0]) || FD_ISSET(socks[i].s, &ws[1]) || FD_ISSET(socks[i].s, &ws[2]))) {
+            any++;
+            if (socks[i].s > top) top = socks[i].s;
+        }
     int waits = !tv || t.tv_sec || t.tv_usec;
     if (!any) {   // Winsock refuses a select without sockets (WSAEINVAL); callers (curl) use it to sleep
         DWORD ms = tv ? (DWORD)(t.tv_sec * 1000 + t.tv_usec / 1000) : INFINITE;
         WAIT_AWAY(waits, Sleep(ms));
         r = 0;
     } else {
-        WAIT_AWAY(waits, r = select(0, &ws[0], &ws[1], &ws[2], tv ? &t : NULL));
+        WAIT_AWAY(waits, r = select((int)top + 1, &ws[0], &ws[1], &ws[2], tv ? &t : NULL));
     }
     for (int s = 0; s < 3; s++)
         for (int i = 0; sets[s] && i < NFD; i++) {
@@ -454,8 +507,15 @@ static void ov_setsockopt(Cpu *c) {   // int SetSockOpt(int, Level, Option, cons
     const char *v = arg_p(c, 3);
     int len = (int)arg_x(c, 4);
     if (!k) { ret_x(c, (uint64_t)(int64_t)fail(E_BADF)); return; }
-    if ((level == 0xFFFF && (opt == 4 || opt == 8 || opt == 0x1001 || opt == 0x1002)) || (level == 6 && opt == 1))
+    if ((level == 0xFFFF && (opt == 4 || opt == 8 || opt == 0x1001 || opt == 0x1002)) || (level == 6 && opt == 1)) {
+#ifndef _WIN32
+        if (level == 0xFFFF) {   // SO_REUSEADDR, SO_KEEPALIVE, SO_SNDBUF, SO_RCVBUF in Linux's numbers
+            level = SOL_SOCKET;
+            opt = opt == 4 ? SO_REUSEADDR : opt == 8 ? SO_KEEPALIVE : opt == 0x1001 ? SO_SNDBUF : SO_RCVBUF;
+        }
+#endif
         setsockopt(k->s, level, opt, v, len);          // the rest (timeouts, linger, no-sigpipe): accepted, ignored
+    }
     ret_x(c, 0);
 }
 
@@ -622,6 +682,7 @@ static const RtHostEntry replaced[] = {
 
 void packages_start(void) {
     if (!cfg_bool("MLB_OFFLINE_PACKAGES") || !server_start()) return;
+#ifdef _WIN32
     WSADATA w;
     if (WSAStartup(MAKEWORD(2, 2), &w)) {
         rt_log("packages: Winsock did not start; the game stays offline");
@@ -629,6 +690,7 @@ void packages_start(void) {
         server = NULL;
         return;
     }
+#endif
     for (size_t i = 0; i < sizeof replaced / sizeof *replaced; i++)
         hostfn_add_override(replaced[i].name, replaced[i].fn);
 }

@@ -27,6 +27,21 @@
 #include "ipc.h"
 #include "platform/platform.h"
 
+// The C library's 64-bit time conversions: the MSVC CRT's _*64 functions, POSIX's *_r and timegm elsewhere.
+#ifdef _WIN32
+typedef __time64_t Time64;
+#define local_tm(t, tm) (_localtime64_s((tm), (t)) == 0)
+#define utc_tm(t, tm) (_gmtime64_s((tm), (t)) == 0)
+#define tm_utc _mkgmtime64
+#define tm_local _mktime64
+#else
+typedef time_t Time64;
+#define local_tm(t, tm) (localtime_r((t), (tm)) != NULL)
+#define utc_tm(t, tm) (gmtime_r((t), (tm)) != NULL)
+#define tm_utc timegm
+#define tm_local mktime
+#endif
+
 #define TICK_HZ 19200000ull
 #define SHM_SIZE 0x1000ull
 
@@ -132,12 +147,12 @@ static int tz_local(void) {
 static const char *location_name(void) { return tz_local() ? "localtime" : "UTC"; }
 
 static void to_calendar(int64_t t, CalendarTime *ct, CalendarInfo *ci) {
-    __time64_t tt = t;
+    Time64 tt = t;
     struct tm tm;
     int local = tz_local();
-    if (local ? _localtime64_s(&tm, &tt) : _gmtime64_s(&tm, &tt)) rt_fatal("time: cannot convert %lld", (long long)t);
+    if (!(local ? local_tm(&tt, &tm) : utc_tm(&tt, &tm))) rt_fatal("time: cannot convert %lld", (long long)t);
     struct tm copy = tm;
-    int32_t offset = local ? (int32_t)(_mkgmtime64(&copy) - tt) : 0;
+    int32_t offset = local ? (int32_t)(tm_utc(&copy) - tt) : 0;
     *ct = (CalendarTime){(int16_t)(tm.tm_year + 1900), (int8_t)(tm.tm_mon + 1), (int8_t)tm.tm_mday, (int8_t)tm.tm_hour,
                          (int8_t)tm.tm_min, (int8_t)tm.tm_sec, 0};
     *ci = (CalendarInfo){(uint32_t)tm.tm_wday, (uint32_t)tm.tm_yday, {0}, tm.tm_isdst > 0, offset};
@@ -151,7 +166,7 @@ static void to_calendar(int64_t t, CalendarTime *ct, CalendarInfo *ci) {
 static int64_t from_calendar(const CalendarTime *ct) {
     struct tm tm = {.tm_year = ct->year - 1900, .tm_mon = ct->month - 1, .tm_mday = ct->day, .tm_hour = ct->hour,
                     .tm_min = ct->minute, .tm_sec = ct->second, .tm_isdst = -1};
-    __time64_t t = tz_local() ? _mktime64(&tm) : _mkgmtime64(&tm);
+    Time64 t = tz_local() ? tm_local(&tm) : tm_utc(&tm);
     if (t == -1) rt_fatal("time: calendar %d-%d-%d %d:%d:%d has no posix time", ct->year, ct->month, ct->day, ct->hour,
                           ct->minute, ct->second);
     return t;

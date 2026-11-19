@@ -4,8 +4,10 @@
 // fastball: MLB_X in the environment wins over TOTK_X, and the table has MLB's own rows (LANGUAGE, TIMEZONE).
 #include "cfg.h"
 
+#ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>   // MoveFileExW (cfg_save)
+#endif
 
 #include <ctype.h>
 #include <stdio.h>
@@ -162,7 +164,11 @@ const char *cfg_get(const char *name) {
 void cfg_set(const char *name, const char *value) {
     char k[64];
     norm_key(name, k);
+#ifdef _WIN32
     const char *copy = value ? _strdup(value) : NULL;   // MSVC CRT name
+#else
+    const char *copy = value ? strdup(value) : NULL;
+#endif
     plat_mutex_lock(&set_lock);
     int i = 0;
     while (i < n_set && strcmp(set_values[i].key, k)) i++;
@@ -175,15 +181,43 @@ void cfg_set(const char *name, const char *value) {
     plat_mutex_unlock(&set_lock);
 }
 
+// mlb.cfg's path, beside the executable. Windows: UTF-16, so a folder name outside the ANSI code page still opens.
+#ifdef _WIN32
+typedef wchar_t PathCh;
+#define PSTR(s) L##s
+#define pfopen _wfopen
+#define premove _wremove
+#define pcat wcscat
+#define pcpy wcscpy
+#define plen wcslen
+static int cfg_dir(PathCh *out, size_t cap) { return plat_exe_dir_wide(out, cap); }
+static int preplace(const PathCh *from, const PathCh *to) { return MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING) != 0; }
+#else
+typedef char PathCh;
+#define PSTR(s) s
+#define pfopen fopen
+#define premove remove
+#define pcat strcat
+#define pcpy strcpy
+#define plen strlen
+static int cfg_dir(PathCh *out, size_t cap) {
+    char *cut = plat_exe_path(out, cap) ? strrchr(out, '/') : NULL;
+    if (!cut) return 0;
+    cut[1] = 0;
+    return 1;
+}
+static int preplace(const PathCh *from, const PathCh *to) { return plat_file_replace(from, to); }
+#endif
+
 // fastball: settings from mlb.cfg beside the executable, one KEY=VALUE per line (MLB_X, TOTK_X or X; '#' or ';'
 // starts a comment), so a player can switch an experiment without a new build or environment variables. Applied with
 // cfg_set before anything reads a setting: the environment still wins, and the defaults main.c sets for unset keys
 // leave a file's value alone. Returns how many settings it applied (0 without a file).
 int cfg_load_file(void) {
-    wchar_t dir[1024];
-    if (!plat_exe_dir_wide(dir, 1000)) return 0;
-    wcscat(dir, L"mlb.cfg");
-    FILE *f = _wfopen(dir, L"r");
+    PathCh dir[1024];
+    if (!cfg_dir(dir, 1000) || plen(dir) > 1000) return 0;
+    pcat(dir, PSTR("mlb.cfg"));
+    FILE *f = pfopen(dir, PSTR("r"));
     if (!f) return 0;
     char line[512];
     int n = 0;
@@ -268,11 +302,12 @@ int cfg_save(void) {
 }
 
 static int save_file(char (*keys)[64], char (*vals)[256], int n) {
-    wchar_t path[1024], tmp[1040];
-    if (!plat_exe_dir_wide(path, 1000)) return 0;
-    wcscat(path, L"mlb.cfg");
-    swprintf(tmp, sizeof tmp / sizeof *tmp, L"%ls.tmp", path);
-    FILE *in = _wfopen(path, L"r"), *out = _wfopen(tmp, L"w");
+    PathCh path[1024], tmp[1040];
+    if (!cfg_dir(path, 1000) || plen(path) > 1000) return 0;
+    pcat(path, PSTR("mlb.cfg"));
+    pcpy(tmp, path);
+    pcat(tmp, PSTR(".tmp"));
+    FILE *in = pfopen(path, PSTR("r")), *out = pfopen(tmp, PSTR("w"));
     if (!out) {
         if (in) fclose(in);
         return 0;
@@ -313,8 +348,8 @@ static int save_file(char (*keys)[64], char (*vals)[256], int n) {
     }
     int ok = !ferror(out);
     ok &= fclose(out) == 0;
-    if (ok) ok = MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING) != 0;
-    if (!ok) _wremove(tmp);
+    if (ok) ok = preplace(tmp, path);
+    if (!ok) premove(tmp);
     rt_log("cfg: %s mlb.cfg (%d setting%s from the menu)", ok ? "wrote" : "could not write", n, n == 1 ? "" : "s");
     return ok;
 }

@@ -909,6 +909,9 @@ int plat_console_attach(void) {
     return 1;
 }
 
+void plat_beep(void) { MessageBeep(0xFFFFFFFFu); }
+int plat_renderdoc_loaded(void) { return GetModuleHandleA("renderdoc.dll") != NULL; }
+
 void plat_message(const char *title, const char *text) {
     wchar_t t[128], w[4096];
     if (!MultiByteToWideChar(CP_UTF8, 0, title, -1, t, 128) || !MultiByteToWideChar(CP_UTF8, 0, text, -1, w, 4096))

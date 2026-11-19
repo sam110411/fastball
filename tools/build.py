@@ -19,8 +19,14 @@ takes the one whose main has the SHA-256 of --exefs/main (default: the dev ExeFS
 The default target is MSVC (LLVM clang in Program Files, Visual Studio's libraries), the dev build. --toolchain builds
 for x86_64-w64-mingw32 with llvm-mingw, whose libraries may be redistributed: the release ships it, and the setup
 compiles the player's game code with it.
+
+On Linux (docs/linux.md) it builds work/build/mlb, an ELF executable, with clang, lld and ninja from PATH (or --clang):
+the runtime's *_sdl.* files and platform/linux.c take the place of the Win32 ones, Vulkan and SDL3 are the system's
+(libvulkan.so.1, libSDL3.so.0; a libSDL3.so.0 beside mlb comes first), libstdc++ is linked statically. The Vulkan, VMA
+and SDL3 headers still come from --deps (tools/fetch_deps.py), which are the same on every OS.
 """
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -33,7 +39,8 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / 'tools'))
 from check_content import GENERATED_MARKER  # noqa: E402
 
-DEFAULT_CLANG = r'C:\Program Files\LLVM\bin\clang.exe'
+LINUX = sys.platform.startswith('linux')
+DEFAULT_CLANG = (shutil.which('clang') or 'clang') if LINUX else r'C:\Program Files\LLVM\bin\clang.exe'
 # Generated code: TotK Recomp tools/build_game.py GEN_FLAGS @ ae30a61 (LAS Recomp's flags plus -march).
 # fastball: -O2 instead of TotK's -O1. In a match at an unlocked frame rate the game's own code (main thread and
 # its three job workers) holds the frame, not the GPU; -O2 gave 3-6% more fps in every game state measured on
@@ -45,14 +52,23 @@ RT_FLAGS = ['-O2', '-g', '-Wall', '-Wno-unused-function', '-fno-strict-aliasing'
             '-D_CRT_SECURE_NO_WARNINGS']
 LIBS = ['bcrypt', 'ws2_32', 'user32', 'kernel32', 'advapi32', 'ntdll', 'synchronization', 'winmm', 'psapi', 'shell32', 'ole32',
         'dbghelp', 'gdi32', 'dwmapi', 'imm32', 'uuid']
-RUNTIME_SOURCES = ['runtime/core/*.c', 'runtime/core/platform/common.c', 'runtime/core/platform/win32.c',
-                   'runtime/core/platform/audio_win32.c', 'runtime/core/platform/prof_win.c',
+RUNTIME_SOURCES = ['runtime/core/*.c', 'runtime/core/platform/*.c',
                    'runtime/mlb/*.c', 'runtime/gfx/*.c', 'runtime/gfx/*.cpp',
                    # the in-game settings menu (F1) and Dear ImGui, which draws it
                    'runtime/gfx/ui/*.cpp', 'runtime/third_party/imgui/*.cpp',
                    'runtime/third_party/imgui/backends/*.cpp']
 DEPS = ROOT / 'work' / 'deps'   # tools/fetch_deps.py: Vulkan headers, VMA, vulkan-1.lib
 CXX_FLAGS = ['-O2', '-g', '-std=c++17', '-march=x86-64-v3', '-D_CRT_SECURE_NO_WARNINGS', '-Wno-nullability-completeness']
+LINUX_LIBS = ['vulkan', 'SDL3', 'm', 'pthread', 'dl']
+# One OS's files of a pair: the Win32 window, menu, software keyboard, platform, audio and sampler, or the SDL3 and
+# Linux ones in their place (runtime/core/platform/platform.h, runtime/gfx/gfx_wsys.h).
+WIN_ONLY = ['*_win.c', '*_win.cpp', 'win32.c', 'audio_win32.c']
+LINUX_ONLY = ['*_sdl.c', '*_sdl.cpp', 'linux.c']
+
+
+def for_this_os(p):
+    other = WIN_ONLY if LINUX else LINUX_ONLY
+    return not any(fnmatch.fnmatch(p.name, pat) for pat in other)
 
 
 def c_string(s):
@@ -182,17 +198,18 @@ def main():
     if a.runtime_lib:   # modules.c is per install: the layout, the linked modules, the default paths, the version
         rt_srcs = [glue]
     else:
-        rt_srcs = sorted({p for pat in RUNTIME_SOURCES for p in ROOT.glob(pat)})
+        rt_srcs = sorted({p for pat in RUNTIME_SOURCES for p in ROOT.glob(pat) if for_this_os(p)})
         if not a.make_runtime_lib:
             rt_srcs.append(glue)
     gen_srcs = [] if a.make_runtime_lib else sorted(p for name in linked for p in (gen / name).glob('*.c'))
-    if not (deps / 'lib' / 'vulkan-1.lib').is_file():
+    if not (deps / 'include' / 'vulkan' / 'vulkan.h').is_file() or (not LINUX and not (deps / 'lib' / 'vulkan-1.lib').is_file()):
         raise SystemExit(f'{deps} is missing the Vulkan headers and import library: run tools/fetch_deps.py')
-    if not (deps / 'include' / 'SDL3' / 'SDL.h').is_file() or not (deps / 'bin' / 'SDL3.dll').is_file():
+    if not (deps / 'include' / 'SDL3' / 'SDL.h').is_file() or (not LINUX and not (deps / 'bin' / 'SDL3.dll').is_file()):
         raise SystemExit(f'{deps} is missing SDL3 (controllers): run tools/fetch_deps.py')
     # runtime/mlb/hid.c loads SDL3.dll from mlb.exe's folder at run time. A running game holds it: keep the old copy then.
+    # On Linux mlb links the system's libSDL3.so.0.
     sdl_src, sdl_dst = deps / 'bin' / 'SDL3.dll', out / 'SDL3.dll'
-    if not a.make_runtime_lib and (not sdl_dst.is_file() or sdl_dst.read_bytes() != sdl_src.read_bytes()):
+    if not LINUX and not a.make_runtime_lib and (not sdl_dst.is_file() or sdl_dst.read_bytes() != sdl_src.read_bytes()):
         try:
             shutil.copyfile(sdl_src, sdl_dst)
         except OSError as e:
@@ -210,11 +227,19 @@ def main():
         if ' ' in d:
             raise SystemExit(f'{d}: keep --gen, --out and --deps inside the repository (or the release folder), '
                              'without spaces')
-    exe = out / 'mlb.exe'
+    exe = out / ('mlb' if LINUX else 'mlb.exe')
     bin_dir = Path(a.clang).parent
     rt_flags, cxx_flags = list(RT_FLAGS), list(CXX_FLAGS)
     vulkan = rel(deps / 'lib' / 'vulkan-1.lib')
-    if mingw:
+    if LINUX:
+        # $ORIGIN: a libSDL3.so.0 next to mlb comes before the system's (a release's own copy). libstdc++ static: the
+        # menu's C++ needs no particular one on the player's system.
+        clangxx = Path(a.clang).with_name(Path(a.clang).name.replace('clang', 'clang++'))
+        link = (f'"{clangxx.as_posix()}" -fuse-ld=lld -g @$out.rsp -o $out {" ".join("-l" + l for l in LINUX_LIBS)} '
+                f"-static-libstdc++ -static-libgcc -Wl,-rpath,'$$ORIGIN' -Wl,-Map={rel(out)}/mlb.map")
+        rc = 'true'
+        ar = 'llvm-ar' if shutil.which('llvm-ar') else 'ar'
+    elif mingw:
         # llvm-mingw: Windows 10 API level (its headers default lower); libc++, libunwind and winpthread linked
         # statically (-static), so mlb.exe needs only the system DLLs and the UCRT. A prebuilt runtime library is linked
         # whole: the game code alone references little of it (not main(), not the resources).
@@ -232,7 +257,8 @@ def main():
                 f'"{compiler_rt(a.clang)}" {vulkan} '
                 f'-Wl,/STACK:8388608 -Wl,/errorlimit:0 -Wl,/MAP:{rel(out)}/mlb.map')
         rc = f'"{(bin_dir / "llvm-rc.exe").as_posix()}" /nologo /I runtime/mlb /FO $out $in'
-    ar = f'"{(bin_dir / "llvm-ar.exe").as_posix()}"'
+    if not LINUX:
+        ar = f'"{(bin_dir / "llvm-ar.exe").as_posix()}"'
     lines = [f'# {GENERATED_MARKER}: written by tools/build.py', f'builddir = {rel(out)}', f'cc = "{Path(a.clang).as_posix()}"',
              f'genflags = {" ".join(GEN_FLAGS)} {" ".join(inc_gen)}',
              f'rtflags = {" ".join(rt_flags)} {" ".join(inc_rt)}',
@@ -247,7 +273,8 @@ def main():
              '  deps = gcc', '  description = CXX $in',
              'rule rc', f'  command = {rc}', '  description = RC $in',
              # a fresh archive each time, so a removed source leaves no stale member
-             'rule ar', f'  command = cmd /c del /q "$out" 2>nul & {ar} rcs $out @$out.rsp', '  rspfile = $out.rsp',
+             'rule ar', (f'  command = rm -f $out && {ar} rcs $out @$out.rsp' if LINUX else
+                         f'  command = cmd /c del /q "$out" 2>nul & {ar} rcs $out @$out.rsp'), '  rspfile = $out.rsp',
              '  rspfile_content = $in', '  description = AR $out',
              'rule link', f'  command = {link}', '  rspfile = $out.rsp', '  rspfile_content = $in',
              '  description = LINK $out', '']
@@ -257,7 +284,7 @@ def main():
         o = out / "obj" / "rt" / sub.with_suffix(".o")
         lines.append(f'build {ninja_path(o)}: {"cxx_rt" if s.suffix == ".cpp" else "cc_rt"} {ninja_path(s)}')
         objs.append(o)
-    if not a.runtime_lib:   # the icon and the manifest (runtime/mlb/mlb.rc); a prebuilt library holds them
+    if not a.runtime_lib and not LINUX:   # the icon and the manifest (runtime/mlb/mlb.rc); a prebuilt library holds them
         res = out / 'obj' / 'rt' / ('mlb.res.o' if mingw else 'mlb.res')
         lines.append(f'build {ninja_path(res)}: rc runtime/mlb/mlb.rc | runtime/mlb/mlb.manifest runtime/mlb/mlb.ico')
         objs.append(res)
