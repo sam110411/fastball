@@ -27,6 +27,7 @@ for _p in (HERE, HERE / 'render'):
         sys.path.insert(0, str(_p))
 import live_bank  # noqa: E402
 import render_all  # noqa: E402
+from swap import swap_in  # noqa: E402
 
 RENDER_VERSION = '1'      # raise when the renderer's pictures change: everything is made again
 NONE = 'no_picture.json'  # in the cache: {equipment id: why} for the items that cannot be rendered (not tried again)
@@ -60,7 +61,7 @@ def _prepare(cache, romfs):
 def _write(path, raw):
     tmp = path.with_name(path.name + '.tmp')
     tmp.write_bytes(raw)
-    tmp.replace(path)
+    swap_in(tmp, path)
 
 
 # ---- one process's share of the work ----------------------------------------------------------------------------------

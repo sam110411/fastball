@@ -1,8 +1,9 @@
 """Keeps the install's file index (game/romfs_list.tsv: size, offset, /PATH per line) true to the game files the
 equipment tool changes. The runtime's RomFS check (mlb.exe --probe-fs) sizes a sample of the listed files against it.
 """
+from swap import swap_in
 
-FILES = ['FRONTEND/RTTS/INVENTORYDATA.XML', 'FRONTEND/RTTS/INVQUANTITYDATA.XML',
+FILES =['FRONTEND/RTTS/INVENTORYDATA.XML', 'FRONTEND/RTTS/INVQUANTITYDATA.XML',
          'FRONTEND/EQUIPMENT/MLBEQUIPMENT.JSON', 'NSW/LIVECONTENT/LIVE.TEX']
 
 
@@ -26,5 +27,5 @@ def sync(game, rels):
     if changed:
         tmp = tsv.with_name(tsv.name + '.new')
         tmp.write_text('\n'.join(lines), encoding='utf-8', newline='')
-        tmp.replace(tsv)
+        swap_in(tmp, tsv)
     return changed

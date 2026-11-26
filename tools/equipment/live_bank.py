@@ -29,6 +29,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / 'render'))
 import bc7  # noqa: E402
+from swap import swap_in  # noqa: E402   (HERE is on the path: equipment.py and pictures.py put it there)
 
 ENTRY = 0x140
 TEMPLATE = 'ritual_gum'
@@ -178,7 +179,7 @@ def install(game, pictures, log=print):
             dst.write(raw)
             dst.write(b'\0' * (_align(len(raw), 16) - len(raw)))
         dst.write(b'\0' * (32 * n))                            # the per-entry trailer
-    tmp.replace(bank)
+    swap_in(tmp, bank)
     log(f'pictures: {len(pictures)} added to {bank.name} ({t.n} -> {n} entries)')
 
 
@@ -186,7 +187,7 @@ def uninstall(game, log=print):
     bank = bank_path(game)
     orig = bank.with_name(bank.name + '.orig')
     if orig.exists():
-        orig.replace(bank)
+        swap_in(orig, bank)
         log(f'equipment: {bank.name} put back')
 
 

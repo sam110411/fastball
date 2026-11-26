@@ -39,6 +39,7 @@ if str(HERE) not in sys.path:                 # python -I leaves the script's fo
 import live_bank  # noqa: E402
 import pictures  # noqa: E402
 import romfs_index  # noqa: E402
+from swap import swap_in  # noqa: E402
 
 ID_BASE = 800000          # our item ids: ID_BASE + equipment id; the game's own items are in the 46000-50000 range
 MARK = 'rtts-equipment'   # the comment around what this tool adds to the two XML files
@@ -70,7 +71,7 @@ def write_text(path, text, newline):
     """Replace path with text: written as a new file, then swapped in."""
     tmp = path.with_name(path.name + '.new')
     tmp.write_text(text, encoding='utf-8', newline=newline)
-    tmp.replace(path)
+    swap_in(tmp, path)
 
 
 def rarity_list():
@@ -211,7 +212,7 @@ def uninstall(game, log=print):
     for f in paths(game):
         orig = f.with_name(f.name + '.orig')
         if orig.exists():
-            orig.replace(f)
+            swap_in(orig, f)
             log(f'equipment: {f.name} put back')
     romfs_index.sync(game, romfs_index.FILES)
 

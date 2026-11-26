@@ -2,12 +2,16 @@
 
     python -I -m unittest discover -s tools/equipment/tests -v        (needs numpy and lz4, as the tool does)
 """
+import contextlib
+import io
 import json
+import os
 import struct
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import numpy as np
 
@@ -19,6 +23,7 @@ import bc7  # noqa: E402
 import equipment  # noqa: E402
 import live_bank  # noqa: E402
 import romfs_index  # noqa: E402
+import swap  # noqa: E402
 import tx12  # noqa: E402
 
 QUIET = lambda text: None   # noqa: E731
@@ -244,6 +249,25 @@ class Install(unittest.TestCase):
             for rel in romfs_index.FILES:
                 self.assertEqual(listed[rel], (game / 'game' / 'romfs' / rel).stat().st_size)
             self.assertEqual(listed['SOMETHING/ELSE.BIN'], 5)
+
+    def test_works_where_windows_refuses_renames_onto_xml(self):
+        # issue #24: a player's PC answers every rename onto an .XML with WinError 17 (ERROR_NOT_SAME_DEVICE)
+        real = os.replace
+
+        def replace(src, dst):
+            if str(dst).upper().endswith('.XML'):
+                raise OSError(18, 'The system cannot move the file to a different disk drive', str(src), 17, str(dst))
+            real(src, dst)
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(swap.os, 'replace', replace), \
+                mock.patch.object(swap.time, 'sleep'), contextlib.redirect_stdout(io.StringIO()):
+            game = make_game(Path(tmp))
+            before = snapshot(game)
+            self.install(game)
+            self.assertEqual(equipment.state(game), dict(installed=True, items=5, owned=5, pictures=0))
+            self.assertEqual(list(game.rglob('*.new')), [])
+            equipment.uninstall(game, QUIET)
+            self.assertEqual(snapshot(game), before)
 
 
 if __name__ == '__main__':
