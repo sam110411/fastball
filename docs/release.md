@@ -184,6 +184,51 @@ Before publishing, install from the unpacked release folder once (the setup's fu
 little and check `logs/mlb.log`. Publishing: a GitHub release with a `v<version>` tag, the zip as its asset, and notes
 that say no game files are included (`docs/release-notes-<version>.md`).
 
+## Nightly builds
+
+A nightly is a snapshot of `dev` for players to test before a release (0.2.1 was tested this way). There is only one
+at a time: each new nightly replaces the last one.
+
+It is kept separate from normal releases in four ways:
+
+- **The `nightly` tag.** The `v<version>` tags are only for normal releases.
+- **A pre-release, never "Latest".** The launchers' updater asks GitHub's `releases/latest`, which leaves pre-releases
+  out (`installer/update.py`). So no player is ever offered a nightly as an update, and the newest normal release
+  keeps the "Latest" badge. RecompLauncher also installs from the GitHub releases, but nobody has checked whether it
+  skips pre-releases.
+- **Its own file name, `Fastball-nightly-<yyyymmdd>-<commit>-windows.zip`.** It does not match the updater's
+  `Fastball-<version>-windows.zip` pattern, so even if the updater were sent to the nightly by mistake it would find
+  no file to install. Upload only this one zip; the `MLBTS-Setup-` copy is only for the old updaters.
+- **Notes that start with a warning.** The first line says it is an untested development snapshot and links to the
+  latest normal release. Then come the changes since the last release, then the same "no game files are included"
+  note as every release.
+
+`VERSION` is not bumped for a nightly, so the setup inside is `<last release>+<commit>` (for example
+`0.2.0+66a12b8`). That means a player on a nightly is offered the next normal release as usual.
+
+Publishing one, from an up-to-date `dev` that is pushed (`git status -sb` shows `## dev...origin/dev` and nothing
+uncommitted of the release's own):
+
+```
+.venv/Scripts/python -I tools/make_release.py
+cp work/release/Fastball-<version>-windows.zip work/release/Fastball-nightly-<yyyymmdd>-<commit>-windows.zip
+gh release delete nightly --cleanup-tag --yes          # the previous nightly, if there is one
+gh release create nightly work/release/Fastball-nightly-<yyyymmdd>-<commit>-windows.zip --target <full commit SHA> \
+    --title "Fastball nightly (dev <commit>, <yyyy-mm-dd>)" --notes-file <notes> --prerelease --latest=false
+```
+
+Then check that `gh api repos/sam110411/fastball/releases/latest --jq .tag_name` still names the last normal release.
+
+Things to watch:
+
+- `make_release.py` writes `work/release/Fastball-<version>-windows.zip` under the last release's version, so it
+  overwrites the local copy of that release's zips. The published ones on GitHub are not touched.
+- Keep the default `--out`. A relative `--out` (such as `work/release-nightly`) breaks the runtime library build: the
+  build runs from `work/release-src` and cannot find the toolchain there (`CreateProcess failed`).
+- Keep the notes outside the repository (`work/scratch/`). Only normal releases get `docs/release-notes-<version>.md`.
+- When the tested nightly becomes a normal release, say in its notes which changes came after the nightly and were
+  not tested by players.
+
 ## Not yet
 
 - XCI and NSZ input: `tools/romfs_dump.py` reads NSP files only.

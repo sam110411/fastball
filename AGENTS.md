@@ -122,6 +122,10 @@ updaters of setups 0.1.1 to 0.1.5 find and can start). The GitHub repository was
 `repos/sam110411/mlbts-native`) still find new releases. Never create a repository named `mlbts-native` under the same
 account: that would end the redirect.
 
+Nightly builds (a snapshot of `dev` for players to test) are a pre-release under the single `nightly` tag, never
+"Latest", with one asset named `Fastball-nightly-<yyyymmdd>-<commit>-windows.zip` and no `VERSION` bump, so the
+launchers' updater never offers them: `docs/release.md`, "Nightly builds".
+
 ## Logs and crash reports
 
 - `work/build/logs/mlb.log`: the whole run. It is replaced at the next start, so **copy it to `work/scratch/` before
