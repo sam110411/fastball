@@ -7,8 +7,9 @@
 // the time between marks of one submission (barriers, copies, uploads). A mark whose ring slot is still in flight
 // gets no timestamps.
 //
-// TotK's pass marks (breadcrumbs for device-lost reports, its overlay's GPU timing) were not ported: this replaces the
-// stubs in gfx_stubs.c with timing only.
+// The same marks are TotK's breadcrumbs for device-lost reports (vk_crumbs.c, on where VK_AMD_buffer_marker exists):
+// a mark is made when either wants it, the ring below is the record both read, and only a timed mark (MLB_TRACE=perf,
+// its slot's queries free) gets timestamps.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -18,9 +19,11 @@
 #include "nvn_api.h"
 #include "platform/platform.h"
 #include "vk.h"
+#include "vk_rec.h"
 
 static VkPassMark ring[VK_PASS_MARKS];
 static uint32_t ended[VK_PASS_MARKS];   // the id whose end was recorded in that slot
+static uint8_t timed[VK_PASS_MARKS];    // the mark in that slot has its start timestamp
 static VkQueryPool qp;
 static int state;                       // 0 not tried, 1 on, -1 off
 static double tick_ns;
@@ -148,21 +151,31 @@ static void collect(void) {
 }
 
 VkPassMark *vk_pass_mark_begin(VkCommandBuffer cb, int kind, uint64_t fence) {
-    if (!(rt_trace & RT_TRACE_PERF) || !init()) return NULL;
-    if ((next_id & 63) == 0) collect();
+    int timing = (rt_trace & RT_TRACE_PERF) && init();
+    if (!cb || (!timing && !vk_pass_marks_on)) return NULL;
+    if (timing && (next_id & 63) == 0) collect();
     uint32_t id = next_id, s = id % VK_PASS_MARKS;
     VkPassMark *m = &ring[s];
-    if (m->id && m->fence > vk_sync_fence_done()) {   // its previous mark is still on the GPU: no timing for this one
+    // its previous mark is still on the GPU: no timing for this one (that mark's queries are in flight)
+    int t = timing && !(m->id && m->fence > vk_sync_fence_done());
+    if (timing && !t) {
         n_skipped++;
-        return NULL;
+        if (!vk_pass_marks_on) return NULL;
     }
-    vkResetQueryPool(vk_ctx()->device, qp, 2 * s, 2);
+    if (t) vkResetQueryPool(vk_ctx()->device, qp, 2 * s, 2);
     memset(m, 0, sizeof *m);
     m->id = id, m->kind = (uint8_t)kind, m->fence = fence, m->draws = UINT32_MAX;
-    ended[s] = 0;
-    vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, qp, 2 * s);
+    ended[s] = 0, timed[s] = (uint8_t)t;
+    if (vk_pass_marks_on) rec_pass_mark(cb, id, 0);
+    if (t) vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, qp, 2 * s);
     next_id = id + 1 ? id + 1 : 1;
     return m;
+}
+
+// vk_crumbs.c: the record of mark id at a device loss; NULL once a later mark took its slot
+const VkPassMark *vk_pass_mark_record(uint32_t id) {
+    const VkPassMark *m = &ring[id % VK_PASS_MARKS];
+    return id && m->id == id ? m : NULL;
 }
 
 VkPassMark *vk_pass_mark_other(VkCommandBuffer cb, uint64_t fence, const char *label) {
@@ -172,8 +185,10 @@ VkPassMark *vk_pass_mark_other(VkCommandBuffer cb, uint64_t fence, const char *l
 }
 
 void vk_pass_mark_end(VkCommandBuffer cb, const VkPassMark *m) {
-    if (!m || state <= 0) return;
+    if (!m || !cb) return;
     uint32_t s = m->id % VK_PASS_MARKS;
+    if (vk_pass_marks_on) rec_pass_mark(cb, m->id, 1);
+    if (!timed[s] || ring[s].id != m->id) return;
     vkCmdWriteTimestamp2(cb, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, qp, 2 * s + 1);
     ended[s] = m->id;
 }

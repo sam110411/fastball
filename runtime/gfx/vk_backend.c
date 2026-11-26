@@ -591,7 +591,9 @@ static void vk_be_guest_read(uint64_t addr, uint64_t size) {
 static uint64_t small_done;
 static volatile int64_t cs_calls, cs_runs;   // diagnosis: syncs the CPU saw complete, and write-back scans they ran
 static void vk_be_cpu_synced(uint64_t fence) {
-    if (plat_add64(&cs_calls, 1) % 4000000 == 0)
+    // fastball: MLB_TRACE=perf only. The game polls its syncs millions of times a minute, and after a fatal error it
+    // keeps polling while the message box is up: a player's log (#32) had 690 of these lines after the error.
+    if (plat_add64(&cs_calls, 1) % 4000000 == 0 && (rt_trace & RT_TRACE_PERF))
         rt_log("vk: CPU-synced fences: %lld, of them %lld scanned the dirty targets", (long long)cs_calls, (long long)cs_runs);
     if (!vk_texture_small_dirty() || fence <= __atomic_load_n(&small_done, __ATOMIC_ACQUIRE)) return;
     plat_add64(&cs_runs, 1);

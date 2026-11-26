@@ -270,7 +270,7 @@ void vk_exec_dispatch_run_close(VkExec *ex) {
     run_m = NULL;
 }
 static void dispatch_run_mark(VkExec *ex, const GfxShader *cs, int chained, uint32_t x, uint32_t y, uint32_t z) {
-    if (!(rt_trace & RT_TRACE_PERF)) return;
+    if (!(rt_trace & RT_TRACE_PERF) && !vk_pass_marks_on) return;   // fastball: and the AMD breadcrumbs (vk_crumbs.c)
     if (!chained || !run_m || run_cb != ex->cb) {
         vk_exec_dispatch_run_close(ex);
         run_m = dispatch_mark(ex, cs, x, y, z);

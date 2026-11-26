@@ -29,12 +29,8 @@ void movie_tick(Cpu *c) { (void)c; }
 
 // ---- perf.c: runtime/core/perf.c
 
-// ---- flight.c, rdoc.c, vk_crumbs.c, vk_dump.c, pass marks: diagnostics
+// ---- flight.c, vk_dump.c: diagnostics (vk_crumbs.c and the pass marks are ported: vk_crumbs.c, vk_passtime.c)
 int flight_on;
-void vk_crumb(VkCommandBuffer cb, int kind, uint64_t n) { (void)cb, (void)kind, (void)n; }
-void vk_crumbs_init(VkCtx *c) { (void)c; }
-void vk_crumbs_release(void) {}
-void vk_crumbs_report(void) {}
 int vk_dump_armed;
 void vk_dump_init(void) {}
 void vk_dump_copy(VkExec *ex, uint32_t op, const void *payload) { (void)ex, (void)op, (void)payload; }
@@ -46,10 +42,6 @@ void vk_dump_draw(VkExec *ex, const VkPipeState *s, VkPipeline p, const VkPipeIn
 }
 void vk_dump_pass_end(VkExec *ex) { (void)ex; }
 void vk_dump_present(uint64_t frame) { (void)frame; }
-// vk_pass_mark_begin / vk_pass_mark_end: vk_passtime.c (GPU time per pass and dispatch, MLB_TRACE=perf)
-void vk_pass_mark_cmd(VkCommandBuffer cb, uint32_t id, int end) { (void)cb, (void)id, (void)end; }
-void vk_pass_marks_report(void) {}
-int vk_pass_marks_want_nv(void) { return 0; }
 // fastball, our own: an RGBA8 PNG with stored (uncompressed) deflate blocks. Big files, no zlib needed; for
 // test shots only.
 static uint32_t png_crc(uint32_t c, const uint8_t *p, size_t n) {
