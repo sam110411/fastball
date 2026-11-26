@@ -20,7 +20,8 @@ The folder:
                       Tcl/Tk files come out of the python.org installer's own component MSI, unpacked with msiexec /a;
                       the installer is never run)
     llvm/             llvm-mingw 20261020, x86_64 only: what clang and lld need to compile and link mlb.exe
-    runtime/          libmlbrt.a (tools/build.py --make-runtime-lib with llvm/: the runtime, no game code), every
+    runtime/          libmlbrt.a and libmlbrt-v2.a (tools/build.py --make-runtime-lib with llvm/, --cpu v3 and v2:
+                      the runtime for CPUs with and without AVX2, no game code), every
                       runtime header, deps/ (include/, lib/vulkan-1.lib, bin/SDL3.dll)
     bin/              ninja.exe, totk_xlate.exe and totk_xlate.id
     recomp/, tools/, installer/, licenses/, LICENSE, THIRD_PARTY_NOTICES.md, README.txt
@@ -88,7 +89,7 @@ SETUP_SCRIPTS = ['recomp/gen.py', 'tools/build.py', 'tools/romfs_dump.py', 'tool
                  'tools/packages/server.py']
 # The only executables and libraries a release may hold (folders are prefixes); anything else stops the release
 EXE_ALLOWED = ('Fastball.exe', 'python/', 'llvm/', 'bin/ninja.exe', 'bin/totk_xlate.exe', 'runtime/deps/bin/SDL3.dll',
-               'runtime/deps/lib/vulkan-1.lib', 'runtime/libmlbrt.a')
+               'runtime/deps/lib/vulkan-1.lib', 'runtime/libmlbrt.a', 'runtime/libmlbrt-v2.a')
 README = """Fastball {version}: MLB The Show 26 for PC
 
 Start Fastball.exe. It builds the game on this PC from your own game files, into the MLBTS folder here (or a
@@ -98,7 +99,8 @@ You need:
 - MLB The Show 26 (NSP) and its 1.0.20 update (NSP; the 1.0.15 update works too), dumped from your own Nintendo
   Switch;
 - prod.keys from your own Switch (the setup finds it in Ryujinx's or yuzu's folder by itself);
-- about 40 GB free, Windows 10 or 11 (64-bit), a CPU with AVX2 and a graphics card with Vulkan 1.3.
+- about 40 GB free, Windows 10 or 11 (64-bit), a 64-bit CPU with SSE4.2 (AVX2 recommended: without it the game
+  is built for your CPU too, and runs slower) and a graphics card with Vulkan 1.3.
 
 No game files, keys or code of the game are in this download, and the setup never uploads anything. The game is
 built on your PC, from your files, for your own use: do not share the installed folder.
@@ -265,12 +267,15 @@ def build_runtime(out, llvm):
     if not (gen / 'layout.h').is_file():
         sys.exit('work/gen/layout.h is missing: run recomp/gen.py once (docs/runtime-port.md)')
     # inside SRC (build.py wants its --out below its root); a fresh library each time: SRC is a new export
-    lib_out = SRC / 'work' / 'release-rtlib'
-    run([sys.executable, '-I', SRC / 'tools' / 'build.py', '--toolchain', llvm, '--make-runtime-lib', '--gen', gen,
-         '--deps', deps, '--out', lib_out, '--ninja', unpack('ninja') / 'ninja.exe'], cwd=SRC)
+    # one per CPU level: x86-64-v3 (AVX2) and x86-64-v2 for CPUs without it; the setup links the one the CPU runs
+    # (installer/detect.py cpu_level). The v2 build checks its objects for instructions above v2 (tools/check_isa.py).
     rt = out / 'runtime'
     rt.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(lib_out / 'libmlbrt.a', rt / 'libmlbrt.a')
+    for cpu, name in (('v3', 'libmlbrt.a'), ('v2', 'libmlbrt-v2.a')):
+        lib_out = SRC / 'work' / f'release-rtlib-{cpu}'
+        run([sys.executable, '-I', SRC / 'tools' / 'build.py', '--toolchain', llvm, '--make-runtime-lib', '--cpu', cpu,
+             '--gen', gen, '--deps', deps, '--out', lib_out, '--ninja', unpack('ninja') / 'ninja.exe'], cwd=SRC)
+        shutil.copy2(lib_out / name, rt / name)
     for p in sorted((SRC / 'runtime').rglob('*')):   # the headers modules.c and the generated C include
         if p.is_file() and p.suffix in ('.h', '.inc'):
             dst = rt / p.relative_to(SRC / 'runtime')
@@ -390,8 +395,14 @@ def smoke(out):
                        text=True, timeout=120)
     if r.returncode != 1 or 'Pick the base game file' not in r.stdout:
         sys.exit(f'setup smoke run: expected it to ask for the game files, got exit {r.returncode}:\n{r.stdout[-2000:]}')
-    print('setup smoke run: ok (asks for the game files)')
+    # the check step's CPU probe (installer/detect.py cpu_level) must compile with llvm/ and the runtime headers here:
+    # its fallback would hide a broken probe and build v3 for some CPUs without the whole v3 set
+    log = ''.join(p.read_text(encoding='utf-8', errors='replace') for p in (out / 'logs').glob('setup-*.log'))
+    if 'cpu: x86-64-' not in log or '(CPUID)' not in log:
+        sys.exit(f'setup smoke run: the CPU probe did not run (setup log):\n{log[-2000:]}')
+    print('setup smoke run: ok (asks for the game files, CPU probe ran)')
     shutil.rmtree(out / 'logs', ignore_errors=True)
+    shutil.rmtree(out / 'temp', ignore_errors=True)   # the probe's source and exe
     shutil.rmtree(dest, ignore_errors=True)
     smoke_packages(out)
 

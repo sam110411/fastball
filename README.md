@@ -73,7 +73,7 @@ full list is the table in [`runtime/mlb/cfg.c`](runtime/mlb/cfg.c).
 | | Minimum |
 |---|---|
 | OS | Windows 10/11, 64-bit |
-| CPU | x86-64 with AVX2 |
+| CPU | x86-64 with SSE4.2 (Intel Core i 1st generation, AMD FX or newer); AVX2 recommended: without it the setup builds a slower version for the CPU |
 | GPU | Vulkan 1.3 capable (an NVIDIA RTX card is needed for DLSS) |
 | RAM | 16 GB recommended; the page file should be large (RenderDoc captures need much more) |
 | Disk | About 40 GB for the extracted game data, plus the build |

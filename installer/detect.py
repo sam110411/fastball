@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 from pathlib import Path
 
 TITLE_BASE = 0x0100AA7024094000      # MLB The Show 26, the base game
@@ -210,12 +211,44 @@ def fsr_gpu(names=None):
                for v in ('AMD', 'RADEON', 'NVIDIA', 'INTEL'))
 
 
-def avx2():
-    """The CPU runs x86-64-v3 code (AVX2): the level the game is compiled for."""
+_cpu = {}
+# The CPU probe: printed level of runtime/core/cpulevel.h (the tests the runtime's start check uses too). Python cannot
+# read CPUID, and IsProcessorFeaturePresent knows AVX2 but not FMA, BMI2, F16C, LZCNT or MOVBE, which v3 code uses as
+# well. Kept here, not as a .c file: a release holds no C source outside its toolchain (make_release.py check).
+CPU_PROBE = '#include <stdio.h>\n#include "cpulevel.h"\nint main(void) { printf("%d\\n", cpulevel()); return 0; }\n'
+
+
+def cpu_level(layout, log=print):
+    """The x86-64 level the game is built for on this PC: 'v3' (AVX2, FMA, BMI2: the default, faster build), 'v2'
+    (SSE4.2, POPCNT: CPUs without AVX2) or None (too old). From CPUID, by CPU_PROBE compiled with the setup's clang
+    for baseline x86-64 into the temp folder (about 2 s, once per run). If that cannot run, IsProcessorFeaturePresent
+    decides, which knows AVX2 and SSE4.2 but not the rest of each level."""
+    if 'level' in _cpu:
+        return _cpu['level']
+    level = None
+    probe = Path(layout.temp) / 'cpuprobe.exe'
+    src = probe.with_suffix('.c')
     try:
-        return bool(ctypes.windll.kernel32.IsProcessorFeaturePresent(40))   # PF_AVX2_INSTRUCTIONS_AVAILABLE
-    except (AttributeError, OSError):
-        return True
+        probe.parent.mkdir(parents=True, exist_ok=True)
+        src.write_text(CPU_PROBE, encoding='ascii')
+        flags = subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+        subprocess.run([str(Path(layout.llvm) / 'bin' / 'clang.exe'), '-O1', '-march=x86-64', '-I',
+                        str(Path(layout.root) / 'runtime' / 'core'), str(src), '-o', str(probe)], check=True,
+                       capture_output=True, timeout=120, creationflags=flags)
+        out = subprocess.run([str(probe)], check=True, capture_output=True, text=True, timeout=30,
+                             creationflags=flags).stdout.strip()
+        level = {'3': 'v3', '2': 'v2', '0': None}[out]
+        log(f'cpu: x86-64-{level or "v1 (too old)"} (CPUID)')
+    except (OSError, subprocess.SubprocessError, KeyError) as e:
+        try:
+            k = ctypes.windll.kernel32
+            # PF_AVX2_INSTRUCTIONS_AVAILABLE, PF_SSE4_2_INSTRUCTIONS_AVAILABLE
+            level = 'v3' if k.IsProcessorFeaturePresent(40) else 'v2' if k.IsProcessorFeaturePresent(38) else None
+        except (AttributeError, OSError):
+            level = 'v3'
+        log(f'cpu: probe failed ({type(e).__name__}: {e}); IsProcessorFeaturePresent says x86-64-{level or "v1"}')
+    _cpu['level'] = level
+    return level
 
 
 def vulkan():

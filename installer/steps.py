@@ -1,6 +1,6 @@
 """The setup's steps, and the bookkeeping that makes a fresh install, a resume and an update one rule.
 
-    check    always: the setup folder, the PC (AVX2, Vulkan), the game files and keys, free space
+    check    always: the setup folder, the PC (its CPU level, Vulkan), the game files and keys, free space
     exefs    the update's code (main, sdk, rtld, main.npdm) into <dest>/game/exefs, checked against its version's hashes
     romfs    the game's data (base + update, about 37 GB) into <dest>/game/romfs (tools/romfs_dump.py; resumable)
     build    lift the code to C (recomp/gen.py, with the version's code patches, tools/data/patches-<version>.txt) and
@@ -112,6 +112,13 @@ class Context:
         self.expected = self.pick_version()
         self.state = self.load_state()
 
+    @property
+    def cpu(self):
+        """The CPU level the game is built for here: 'v3' (AVX2), 'v2' (no AVX2) or None (too old to run it); --cpu v3
+        or v2 picks it instead (mlb.exe still refuses a level the CPU lacks: runtime/mlb/cpucheck.c)."""
+        forced = getattr(self.options, 'cpu', 'auto')
+        return forced if forced in ('v3', 'v2') else detect.cpu_level(self.layout, self.reporter.log)
+
     def pick_version(self):
         """tools/data/expected-<version>.json of the game version this install builds: the picked update's, else the
         installed code's, else the newest."""
@@ -215,9 +222,11 @@ class Check(Step):
         if missing:
             raise InstallError('The setup folder is incomplete (' + missing[0] + ' is missing). Unpack the whole '
                                'download again, into an empty folder.')
-        if not detect.avx2():
-            raise InstallError('This CPU has no AVX2. The port needs a CPU from about 2013 or later (Intel Haswell, '
-                               'AMD Zen or newer).')
+        if not ctx.cpu:
+            raise InstallError('This CPU is too old for the game: it needs SSE4.2 and POPCNT (Intel Core i 1st '
+                               'generation, AMD FX / Bulldozer or newer).')
+        if ctx.cpu == 'v2':
+            rep.log('check: this CPU has no AVX2: the game is built for x86-64-v2 (SSE4.2), which runs slower')
         if not detect.vulkan():
             raise InstallError('No Vulkan driver found (vulkan-1.dll). Install the latest driver for your graphics card.')
         # Portable: the game goes in a folder of its own inside the setup folder (MLBTS\ by default, as RecompLauncher
@@ -400,8 +409,11 @@ class Build(Step):
 
     def key(self, ctx):
         patches = ctx.layout.patches(ctx.expected['display_version'])
+        # the CPU level only when it is not the default, so v3 installs keep the key they had before the v2 build:
+        # an exe built for v3 on a PC without AVX2 (an install moved over, or one of a setup up to 0.2.1) is built again
         return fingerprint('build-1', ctx.layout.release, json.dumps(ctx.expected['exefs_sha256'], sort_keys=True),
-                           sha256_file(patches) if patches.is_file() else '')
+                           sha256_file(patches) if patches.is_file() else '',
+                           *([] if ctx.cpu in ('v3', None) else ['cpu-' + ctx.cpu]))
 
     def current(self, ctx, record):
         return (ctx.dest / 'mlb.exe').is_file()
@@ -432,8 +444,14 @@ class Build(Step):
             return False
 
         rep.progress(self.id, 'Compiling', force=True)
+        # the runtime library and the game code for the CPU's level (tools/build.py --cpu): v2 has no AVX2 and FMA
+        cpu = ctx.cpu or 'v3'
+        lib = lay.runtime_lib if cpu == 'v3' else lay.runtime_lib_v2
+        if not lib.is_file():
+            raise InstallError(f'The setup folder is incomplete ({lib} is missing). Unpack the whole download again, '
+                               'into an empty folder.')
         ctx.run_tool(self.id, py + [lay.tools / 'build.py', '--toolchain', lay.llvm, '--deps', lay.deps,
-                                   '--ninja', lay.ninja, '--runtime-lib', lay.runtime_lib, '--portable',
+                                   '--ninja', lay.ninja, '--runtime-lib', lib, '--cpu', cpu, '--portable',
                                    '--exefs', ctx.game / 'exefs', '--gen', gen, '--out', out], build_line)
         rep.progress(self.id, 'Copying the game into the install folder', force=True)
         for src in (out / 'mlb.exe', out / 'SDL3.dll', lay.xlate, lay.xlate.with_suffix('.id')):
@@ -445,7 +463,7 @@ class Build(Step):
             except PermissionError:
                 os.remove(tmp)
                 raise InstallError(f'{dst} is in use: close the game and run the setup again.') from None
-        return {}
+        return {'cpu': cpu}
 
 
 # ---- equipment ------------------------------------------------------------------------------------------------------

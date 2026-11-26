@@ -75,7 +75,7 @@ Every choice is a flag, so launchers and scripts need no window:
   message box.
 - `python\python.exe -m installer --help`: the setup without a window (`installer/cli.py`): `--dest`, `--base`,
   `--update`, `--keys`, `--titlekeys`, `--temp` (the build folder), `--dlss`, `--shortcut`, `--import-save`, the Road
-  to the Show options, `--launcher`.
+  to the Show options, `--cpu auto|v3|v2` (the build's instruction set; auto reads the CPU), `--launcher`.
 
 ## The install folder
 
@@ -103,8 +103,10 @@ Every choice is a flag, so launchers and scripts need no window:
 `fastball-install.json`; a step with the same key and its output in place is skipped, so a cancelled setup resumes and an
 update only rebuilds.
 
-1. **Check**: the setup folder is complete; the CPU has AVX2 (the game is built for x86-64-v3); a Vulkan driver is
-   installed; the NSPs are MLB The Show 26 and its 1.0.20 or 1.0.15 update (`cnmt.xml` in the NSP, else the
+1. **Check**: the setup folder is complete; the CPU's level (`installer/detect.py cpu_level`: a probe of
+   `runtime/core/cpulevel.h`, compiled with `llvm/` and run, reads CPUID): x86-64-v3 (AVX2, FMA, BMI2) builds the
+   normal game, x86-64-v2 (SSE4.2, POPCNT) a slower one for CPUs without AVX2, anything older is refused; a Vulkan
+   driver is installed; the NSPs are MLB The Show 26 and its 1.0.20 or 1.0.15 update (`cnmt.xml` in the NSP, else the
    ticket's name);
    `prod.keys` has a `header_key`; free space (37 GB less what is already extracted, plus 2 GB; 2 GB next to the
    setup for the build).
@@ -115,7 +117,10 @@ update only rebuilds.
    setups before 1.0.20 support); another version's data is removed first, because the extraction skips files that
    are there at their size.
 4. **Build**: `recomp/gen.py` into the setup's `temp/`, then `tools/build.py --toolchain llvm --runtime-lib
-   runtime/libmlbrt.a --portable --exefs game/exefs` (the game version comes from main's hash); `mlb.exe`, `SDL3.dll` and the translator are copied into the install folder.
+   runtime/libmlbrt.a --cpu v3 --portable --exefs game/exefs` (the game version comes from main's hash; on a CPU
+   without AVX2 `runtime/libmlbrt-v2.a --cpu v2`, and the step's key holds the level, so the same folder on another
+   CPU builds again); `mlb.exe`, `SDL3.dll` and the translator are copied into the install folder. `mlb.exe` checks
+   the CPU before `main` (`runtime/mlb/cpucheck.c`) and says to run Repair when it was built for a level the CPU lacks.
 5. **Equipment** (only with `--equipment`, or on an install that has it): `tools/equipment/equipment.py install`
    adds every Road to the Show equipment item to the game data, with pictures rendered from the player's files
    ([tools/equipment](../tools/equipment/README.md)). `--no-equipment` puts the game data back. An install that has
@@ -146,7 +151,8 @@ llvm-mingw has no `__try`, so its two guarded unwind calls use a vectored handle
 Fastball.exe        installer/launcher/launcher.c: starts python\pythonw.exe -m installer.gui, no console
 python/             python.org embeddable 3.14.9, numpy, lz4 (tools/requirements-release.txt), tkinter
 llvm/               llvm-mingw 20261020, x86_64 subset
-runtime/            libmlbrt.a (the runtime, built with llvm/), every runtime header, deps/ (Vulkan headers, VMA, SDL3
+runtime/            libmlbrt.a and libmlbrt-v2.a (the runtime for x86-64-v3 and v2, built with llvm/), every runtime
+                    header, deps/ (Vulkan headers, VMA, SDL3
                     headers, lib/vulkan-1.lib, bin/SDL3.dll)
 bin/                ninja.exe, totk_xlate.exe (+ .id)
 recomp/, tools/     the lifter; build.py, romfs_dump.py and its imports, data/expected-1.0.15.json and -1.0.20.json,
@@ -167,7 +173,8 @@ shared headers of `work/gen`, never its C). Set `VERSION`, commit, then:
 It builds from a clean export of the last commit (`git archive HEAD` into `work/release-src`): uncommitted work is
 never in a release and the working tree is left alone (`--from-worktree` builds from it instead, for tests only). It
 downloads the pinned files (TotK Recomp's pins, SHA-256 checked, cached in `work/toolchain/release-dl`), builds
-`libmlbrt.a` and `Fastball.exe` with the release's own llvm-mingw, and refuses the folder if any file carries game
+`libmlbrt.a`, `libmlbrt-v2.a` (checked by `tools/check_isa.py`) and `Fastball.exe` with the release's own
+llvm-mingw, and refuses the folder if any file carries game
 data, the generated-code marker, key lines, or is an executable outside the tools it lists. Then the folder's own Python
 imports the setup, the window builds every screen (`--selftest`), and a setup run without game files must stop asking
 for them. The zips are `work/release/Fastball-<version>-windows.zip` and `work/release/MLBTS-Setup-<version>-windows.zip`
@@ -180,7 +187,6 @@ that say no game files are included (`docs/release-notes-<version>.md`).
 ## Not yet
 
 - XCI and NSZ input: `tools/romfs_dump.py` reads NSP files only.
-- A CPU without AVX2: the runtime library and the game are built for x86-64-v3 only.
 - Preparing the shaders at install: the game translates them while playing, so the first matches stutter while the
   cache fills.
 - One language (English) in the setup window.

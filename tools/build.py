@@ -4,6 +4,13 @@
     python -I tools/build.py --toolchain <llvm-mingw> --out work/build-mingw          # the release's toolchain
     python -I tools/build.py --toolchain <llvm-mingw> --make-runtime-lib --out DIR    # DIR/libmlbrt.a, no game code
     python -I tools/build.py --toolchain <llvm-mingw> --runtime-lib libmlbrt.a --portable --gen G --out O   # an install
+    python -I tools/build.py --cpu v2 --out work/build-v2                             # for CPUs without AVX2
+
+--cpu picks the instruction set of the runtime and the game code: v3 (x86-64-v3: AVX2, FMA, BMI2; the default) or v2
+(x86-64-v2: SSE4.2, POPCNT) for CPUs without AVX2, which runs slower (no AVX, and runtime/core/fma.c computes the
+Switch's fused multiply-adds in software). --make-runtime-lib --cpu v2 writes libmlbrt-v2.a. Inline assembly, target
+attributes and intrinsics are not bound by -march, so a v2 build checks the runtime's objects (tools/check_isa.py).
+mlb.exe checks the CPU before main (runtime/mlb/cpucheck.c), and refuses game code and a runtime of different levels.
 
 Inputs: --gen holds layout.json/layout.h/patches.h and one directory per module (main, sdk) from recomp/gen.py.
 Writes --out/modules.c (layout table, linked modules, expected ExeFS hashes from tools/data/expected-<version>.json,
@@ -41,6 +48,7 @@ DEFAULT_CLANG = r'C:\Program Files\LLVM\bin\clang.exe'
 # more compile time per file.
 GEN_FLAGS = ['-O2', '-fno-strict-aliasing', '-Wno-return-type', '-Wno-unused-label', '-fvisibility=hidden',
              '-march=x86-64-v3']
+# fastball: --cpu v2 puts -march=x86-64-v2 in place of each -march=x86-64-v3 (TotK Recomp tools/build_game.py set_cpu).
 RT_FLAGS = ['-O2', '-g', '-Wall', '-Wno-unused-function', '-fno-strict-aliasing', '-march=x86-64-v3', '-std=gnu11',
             '-D_CRT_SECURE_NO_WARNINGS']
 LIBS = ['bcrypt', 'ws2_32', 'user32', 'kernel32', 'advapi32', 'ntdll', 'synchronization', 'winmm', 'psapi', 'shell32', 'ole32',
@@ -61,6 +69,13 @@ CXX_FLAGS = ['-O2', '-g', '-std=c++17', '-march=x86-64-v3', '-D_CRT_SECURE_NO_WA
 # only, so a build from another folder (the release's export) finds the same names.
 RUNTIME_PROFILE = ROOT / 'tools' / 'data' / 'runtime.profdata'
 PGO_NAMES = ['-mllvm', '-static-func-full-module-prefix=false']
+# Compiled for baseline x86-64 whatever --cpu says: the CPU check that runs before main (it must not stop on an AVX2
+# instruction of its own on the CPUs it is there to catch)
+BASELINE_SOURCES = {'runtime/mlb/cpucheck.c'}
+
+
+def set_march(flags, march):
+    return [march if f.startswith('-march=') else f for f in flags]
 
 
 def c_string(s):
@@ -89,7 +104,7 @@ def game_version(want, exefs, layout):
     return e
 
 
-def module_glue(layout, linked, hashes, paths, version, game):
+def module_glue(layout, linked, hashes, paths, version, game, cpu_level):
     """modules.c: the layout table, the linked modules' function tables (dispatch.h), expected ExeFS hashes, the
     default game paths and the version strings (host.h). After TotK Recomp tools/build_game.py module_glue."""
     out = [f'// Module glue written by tools/build.py; do not edit. {GENERATED_MARKER}',
@@ -116,7 +131,9 @@ def module_glue(layout, linked, hashes, paths, version, game):
         out.append(f'const char rt_default_{name}[] = {c_string(paths[name])};')
     out += ['// 0: not a TotK build. Only TotK self-test probes (loader.c, ipc.c) read it.',
             'const int rt_game_version = 0;', f'const char rt_port_version[] = {c_string(version)};',
-            f'const char rt_game_build[] = {c_string(game)};', '']
+            f'const char rt_game_build[] = {c_string(game)};',
+            '// the x86-64 level the generated code was compiled for (tools/build.py --cpu); runtime/mlb/cpucheck.c',
+            f'const int rt_gen_cpu_level = {cpu_level};', '']
     return '\n'.join(out)
 
 
@@ -160,6 +177,9 @@ def main():
     ap.add_argument('--runtime-lib', type=Path, help='link this prebuilt libmlbrt.a instead of compiling the runtime')
     ap.add_argument('--portable', action='store_true', help="default paths beside mlb.exe (game/exefs, game/romfs, "
                                                            "profile) instead of the repository's work/ folders")
+    ap.add_argument('--cpu', default='v3', choices=('v3', 'v2'),
+                    help='instruction set: v3 (x86-64-v3, AVX2/FMA/BMI2, the default) or v2 (x86-64-v2, SSE4.2/POPCNT: '
+                         'for CPUs without AVX2; slower)')
     ap.add_argument('--pgo', default='auto', metavar='auto|off|gen|FILE',
                     help='profile-guided optimisation of the runtime: auto (default) uses tools/data/runtime.profdata '
                          'when it exists, gen builds a runtime that counts (tools/pgo.py), FILE another .profdata')
@@ -169,6 +189,10 @@ def main():
         a.clang = str(a.toolchain.resolve() / 'bin' / 'clang.exe')
     if (a.make_runtime_lib or a.runtime_lib) and not mingw:
         raise SystemExit('--make-runtime-lib and --runtime-lib need --toolchain (releases are built with llvm-mingw)')
+    cpu_level = 3 if a.cpu == 'v3' else 2
+    lib_name = 'libmlbrt.a' if a.cpu == 'v3' else f'libmlbrt-{a.cpu}.a'
+    if a.runtime_lib and a.runtime_lib.name.endswith('-v2.a') != (a.cpu == 'v2'):
+        raise SystemExit(f'--runtime-lib {a.runtime_lib.name} is not the runtime for --cpu {a.cpu} ({lib_name})')
     deps = a.deps.resolve()
     gen, out = a.gen.resolve(), a.out.resolve()
     layout = json.loads((gen / 'layout.json').read_text())
@@ -186,7 +210,8 @@ def main():
                  'romfs': (ROOT / 'work' / 'romfs' / 'romfs').as_posix(), 'profile': (ROOT / 'work' / 'profile').as_posix()}
     out.mkdir(parents=True, exist_ok=True)
     glue = out / 'modules.c'
-    text = module_glue(layout, linked, expected['exefs_sha256'], paths, port_version, expected['display_version'])
+    text = module_glue(layout, linked, expected['exefs_sha256'], paths, port_version, expected['display_version'],
+                       cpu_level)
     if not a.make_runtime_lib and (not glue.exists() or glue.read_text() != text):
         glue.write_text(text)
 
@@ -223,7 +248,10 @@ def main():
                              'without spaces')
     exe = out / 'mlb.exe'
     bin_dir = Path(a.clang).parent
-    rt_flags, cxx_flags = list(RT_FLAGS), list(CXX_FLAGS)
+    march = f'-march=x86-64-{a.cpu}'
+    gen_flags = set_march(GEN_FLAGS, march)
+    rt_flags = set_march(RT_FLAGS, march) + [f'-DRT_CPU_LEVEL={cpu_level}']
+    cxx_flags = set_march(CXX_FLAGS, march) + [f'-DRT_CPU_LEVEL={cpu_level}']
     pgo_link, pgo_dep = '', ''
     profile = None if a.pgo in ('off', 'gen') else RUNTIME_PROFILE if a.pgo == 'auto' else Path(a.pgo).resolve()
     if a.pgo == 'gen':
@@ -264,7 +292,7 @@ def main():
         rc = f'"{(bin_dir / "llvm-rc.exe").as_posix()}" /nologo /I runtime/mlb /FO $out $in'
     ar = f'"{(bin_dir / "llvm-ar.exe").as_posix()}"'
     lines = [f'# {GENERATED_MARKER}: written by tools/build.py', f'builddir = {rel(out)}', f'cc = "{Path(a.clang).as_posix()}"',
-             f'genflags = {" ".join(GEN_FLAGS)} {" ".join(inc_gen)}',
+             f'genflags = {" ".join(gen_flags)} {" ".join(inc_gen)}',
              f'rtflags = {" ".join(rt_flags)} {" ".join(inc_rt)}',
              # fastball: the generated code tracks its headers too (runtime/core/simd.h is inlined everywhere: a
              # change there left every game object stale)
@@ -286,6 +314,8 @@ def main():
         sub = s.relative_to(ROOT) if s.is_relative_to(ROOT) else Path(s.name)
         o = out / "obj" / "rt" / sub.with_suffix(".o")
         lines.append(f'build {ninja_path(o)}: {"cxx_rt" if s.suffix == ".cpp" else "cc_rt"} {ninja_path(s)}{pgo_dep}')
+        if sub.as_posix() in BASELINE_SOURCES:
+            lines.append(f'  rtflags = {" ".join(set_march(rt_flags, "-march=x86-64"))} {" ".join(inc_rt)}')
         objs.append(o)
     if not a.runtime_lib:   # the icon and the manifest (runtime/mlb/mlb.rc); a prebuilt library holds them
         res = out / 'obj' / 'rt' / ('mlb.res.o' if mingw else 'mlb.res')
@@ -296,7 +326,7 @@ def main():
         lines.append(f'build {ninja_path(o)}: cc_gen {ninja_path(s)}')
         objs.append(o)
     if a.make_runtime_lib:
-        target = out / 'libmlbrt.a'
+        target = out / lib_name
         lines.append(f'build {ninja_path(target)}: ar {" ".join(ninja_path(o) for o in objs)}')
     else:
         target = exe
@@ -307,7 +337,18 @@ def main():
     nf.write_text('\n'.join(lines) + '\n')
     ninja = str(a.ninja) if a.ninja else shutil.which('ninja') or str(Path(sys.executable).parent / 'ninja.exe')
     cmd = [ninja, '-f', rel(nf), '-k', '0'] + (['-j', str(a.jobs)] if a.jobs else [])   # every failure, not the first
-    sys.exit(subprocess.run(cmd, cwd=ROOT).returncode)
+    code = subprocess.run(cmd, cwd=ROOT).returncode
+    if code == 0 and a.cpu == 'v2' and not a.runtime_lib:
+        # Inline assembly, target attributes and intrinsics pass -march=x86-64-v2 by; one vmovdqa of a YMM register
+        # stops a CPU without AVX (tools/check_isa.py). The prebuilt library of an install was checked when it was made.
+        import check_isa
+        rt_objs = [o for o in objs if o.suffix == '.o' and 'gen' not in o.relative_to(out / 'obj').parts[:1]]
+        fail = check_isa.check_objects(rt_objs, check_isa.find_objdump(bin_dir / 'llvm-objdump.exe'),
+                                       out / 'obj' / 'rt' / 'isa-v2.json')
+        if fail:
+            target.unlink(missing_ok=True)   # not an exe or library that crashes such a CPU
+            raise SystemExit(f'build.py: {fail}')
+    sys.exit(code)
 
 
 if __name__ == '__main__':

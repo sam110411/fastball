@@ -70,6 +70,36 @@ work/build/mlb.exe
 when `work/gen` was generated from another version's `main`. The dev tree runs 1.0.20; 1.0.15's files are in
 `work/update-1.0.15` and `work/romfs-1.0.15` (AGENTS.md, "Game versions").
 
+### CPUs without AVX2 (`--cpu v2`)
+
+The default build targets x86-64-v3 (AVX2, FMA, BMI2: Intel Haswell 2013 / AMD Excavator, Zen and newer). For older
+CPUs `tools/build.py --cpu v2` compiles the runtime and the game code for x86-64-v2 (SSE4.2, POPCNT: Intel Core i 1st
+generation, AMD FX / Bulldozer and newer), as TotK Recomp and Astral Chain Recomp do (`build_game.py --cpu v2`):
+
+```bash
+.venv/Scripts/python -I tools/build.py --cpu v2 --out work/build-v2
+.venv/Scripts/python -I tools/build.py --toolchain <llvm-mingw> --make-runtime-lib --cpu v2 --out work/rtlib   # libmlbrt-v2.a
+```
+
+- What changes in a v2 build: no AVX, so `runtime/core/fma.c` gives the Switch's fused multiply-adds their single
+  rounding in software, and the core switch stub (`kernel.c` `kern_ap_stub`) saves XMM registers with SSE moves.
+  Measured on the dev machine (Ryzen 5 5600X, attract match, unlocked, 2026-11-26): about 146 fps against 161 fps for
+  v3, so about 10% slower. Only CPUs without AVX2 get it.
+- Guard: `-march` does not bind inline assembly, `target(...)` attributes or intrinsics, so a v2 build runs
+  `tools/check_isa.py` over the runtime's objects and fails on any instruction above v2 outside a function it lists as
+  dispatched by a CPU check (`sha256.c` `blocks_ni`). The 240 generated objects of a v2 build were checked the same way
+  once (clean); they are plain C.
+- `mlb.exe` checks the CPU before `main` and before any code built for v3 runs: `runtime/mlb/cpucheck.c`, built for
+  baseline x86-64 and run as a CRT initializer (`.CRT$XIU`). It also refuses a runtime and game code of different
+  levels (`RT_CPU_LEVEL` against `rt_gen_cpu_level` in `modules.c`): the switch stub of a v2 runtime does not save the
+  YMM halves v3 game code may hold. `mlb.log` says which level it was built for (`cpu: game built for x86-64-v2, ...`).
+- The setup reads the CPU's level with CPUID (`installer/detect.py` `cpu_level`: a probe of `runtime/core/cpulevel.h`, compiled with the
+  setup's clang) and links `libmlbrt.a` or `libmlbrt-v2.a`; `--cpu v2` forces the v2 build for tests. The level is
+  part of the build step's key, so the same install on another CPU is built again by Repair.
+- Super Odyssey Recomp instead builds its runtime for baseline x86-64 for everyone and adds an AVX-only level
+  (`-march=sandybridge`) for the game code. Not taken here: the baseline runtime would cost AVX2 players frame rate,
+  and the AVX level would need a v2 runtime whose switch stub saves YMM registers when the CPU has them.
+
 ### Profile-guided optimisation of the runtime
 
 The runtime (not the game's code) is compiled with `tools/data/runtime.profdata`, counts of which runtime functions and

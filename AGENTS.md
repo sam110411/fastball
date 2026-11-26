@@ -61,6 +61,11 @@ it). Retrain it after large replay changes (`tools/pgo.py`, `docs/runtime-port.m
 First-time setup (only for a fresh checkout): see `docs/runtime-port.md`. In short: extract the ExeFS and RomFS with
 `tools/romfs_dump.py` and the keys, then `recomp/gen.py`, `tools/fetch_deps.py` and `tools/build_xlate.py`.
 `mlb.exe` is locked while the game runs: the link fails then, so check `tasklist` first.
+CPUs without AVX2: `tools/build.py --cpu v2 --out work/build-v2` builds runtime and game code for x86-64-v2 (SSE4.2);
+the default is v3 (AVX2, FMA, BMI2). The setup picks the level from CPUID (`installer/detect.py` `cpu_level`) and links
+`libmlbrt.a` or `libmlbrt-v2.a`; `mlb.exe` checks the CPU before `main` (`runtime/mlb/cpucheck.c`). Runtime code must
+compile at both levels: AVX intrinsics, `target(...)` attributes or inline AVX assembly need an `#ifdef __AVX__`
+SSE path or a runtime CPU check; a v2 build refuses objects with instructions above v2 (`tools/check_isa.py`).
 Upscalers: `MLB_DLSS` needs `nvngx_dlss.dll` and `MLB_FSR` (FSR 3.1 / 4, `vk_ffx.c`) AMD's two DLLs next to `mlb.exe`;
 `tools/fetch_ffx.py` puts AMD's into `work/build`. Both are off by default and turned on in the F1 menu (Graphics).
 
@@ -94,7 +99,7 @@ replace-and-assert is reliable.
 A release is a setup, never the game: **no `mlb.exe`, generated C, objects or anything else built from the game's code
 or data** goes into it. The player's PC extracts their own NSPs and builds `mlb.exe` with the bundled llvm-mingw and the
 prebuilt runtime library `libmlbrt.a` (`tools/build.py --toolchain ... --make-runtime-lib`, which contains no game
-code). `tools/make_release.py` builds from `git archive HEAD` (uncommitted work never ships) and refuses a folder that
+code; `libmlbrt-v2.a` with `--cpu v2`, for CPUs without AVX2). `tools/make_release.py` builds from `git archive HEAD` (uncommitted work never ships) and refuses a folder that
 fails the content check. The dev build stays MSVC; runtime code must also compile with llvm-mingw (no `__try`, no
 MSVC-only APIs): check with `tools/build.py --toolchain work/toolchain/llvm-mingw-20261020-ucrt-x86_64 --out
 work/build-mingw`. Details: `docs/release.md`.

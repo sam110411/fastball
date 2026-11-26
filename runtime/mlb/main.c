@@ -440,6 +440,7 @@ static const char *beside_exe(const char *p) {
 int main(int argc, char **argv) {
     mem_init();   // first: claim the guest address space before anything else can land there
     rt_log("version: Fastball %s, game MLB The Show 26 %s", rt_port_version, rt_game_build);
+    cpucheck_log();
     setvbuf(stdout, NULL, _IONBF, 0);
     setvbuf(stderr, NULL, _IONBF, 0);
     plat_crash_hook(crash_handler);

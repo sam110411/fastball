@@ -111,6 +111,9 @@ def main(argv=None):
     ap.add_argument('--no-packages', action='store_true',
                     help='take the packages out again; this unlocks all equipment items in every Road to the Show '
                          'save')
+    ap.add_argument('--cpu', choices=('auto', 'v3', 'v2'), default='auto',
+                    help='the instruction set the game is built for: auto (default: from the CPU), v3 (AVX2) or v2 '
+                         '(SSE4.2, slower: for CPUs without AVX2, or to test that build)')
     ap.add_argument('--launcher', action='store_true',
                     help='run by a launcher: progress lines instead of JSON events')
     args = ap.parse_args(argv)

@@ -4,7 +4,8 @@ Release (docs/release.md, "Release layout"), root = the unpacked folder:
 
     python/python.exe     runs every tool (numpy, lz4, tkinter); its ._pth puts .., ../tools and ../recomp on sys.path
     llvm/                 llvm-mingw: clang, lld, llvm-ar, llvm-windres and the mingw-w64 headers and libraries
-    runtime/              libmlbrt.a (the runtime, no game code), the headers the game code and modules.c include,
+    runtime/              libmlbrt.a and libmlbrt-v2.a (the runtime for CPUs with and without AVX2, no game code),
+                          the headers the game code and modules.c include,
                           runtime/deps (Vulkan, VMA and SDL3 headers, lib/vulkan-1.lib, bin/SDL3.dll)
     bin/                  ninja.exe, totk_xlate.exe and totk_xlate.id (the shader translator)
     recomp/, tools/       the lifter and the extraction and build scripts; tools/equipment and tools/packages (the
@@ -17,7 +18,8 @@ Release (docs/release.md, "Release layout"), root = the unpacked folder:
                           RecompLauncher installs there too, recomplauncher.json)
 
 Dev mode, root = a repository checkout (no python/python.exe): the venv's Python, work/toolchain/llvm-mingw-*,
-work/rtlib/libmlbrt.a (tools/build.py --toolchain ... --make-runtime-lib --out work/rtlib), work/deps, the venv's ninja,
+work/rtlib/libmlbrt.a (tools/build.py --toolchain ... --make-runtime-lib --out work/rtlib; libmlbrt-v2.a with --cpu v2,
+only needed to test a v2 setup), work/deps, the venv's ninja,
 work/xlate and work/install-temp, work/launcher.json and work/logs. Its version is VERSION plus -dev.
 """
 import os
@@ -49,7 +51,8 @@ class Layout:
     recomp: Path
     llvm: Path
     deps: Path
-    runtime_lib: Path
+    runtime_lib: Path    # libmlbrt.a: the runtime for x86-64-v3 (AVX2), the default
+    runtime_lib_v2: Path  # libmlbrt-v2.a: for CPUs without AVX2 (tools/build.py --cpu v2)
     ninja: Path
     xlate: Path          # totk_xlate.exe; the totk_xlate.id beside it is copied too
     temp: Path
@@ -89,6 +92,8 @@ class Layout:
                 self.tools / 'equipment' / 'equipment.py', self.tools / 'packages' / 'server.py',
                 self.recomp / 'gen.py', self.llvm / 'bin' / 'clang.exe', self.deps / 'lib' / 'vulkan-1.lib',
                 self.deps / 'bin' / 'SDL3.dll', self.runtime_lib, self.ninja, self.xlate]
+        if not self.dev:   # a repository builds work/rtlib/libmlbrt-v2.a only to test the v2 setup
+            need.append(self.runtime_lib_v2)
         need += [self.expected(v) for v in GAME_VERSIONS] + [self.patches(v) for v in GAME_VERSIONS]
         return [str(p) for p in need if not p.exists()]
 
@@ -99,6 +104,7 @@ def release_layout(root):
                   release=version.read_text(encoding='utf-8').strip() if version.is_file() else 'unknown',
                   python=root / 'python' / 'python.exe', tools=root / 'tools', recomp=root / 'recomp',
                   llvm=root / 'llvm', deps=root / 'runtime' / 'deps', runtime_lib=root / 'runtime' / 'libmlbrt.a',
+                  runtime_lib_v2=root / 'runtime' / 'libmlbrt-v2.a',
                   ninja=root / 'bin' / 'ninja.exe', xlate=root / 'bin' / 'totk_xlate.exe', temp=root / 'temp',
                   state=root / 'launcher.json')
 
@@ -111,6 +117,7 @@ def dev_layout(root):
                   tools=root / 'tools', recomp=root / 'recomp',
                   llvm=trees[-1] if trees else root / 'work' / 'toolchain' / 'llvm-mingw-missing',
                   deps=root / 'work' / 'deps', runtime_lib=root / 'work' / 'rtlib' / 'libmlbrt.a',
+                  runtime_lib_v2=root / 'work' / 'rtlib' / 'libmlbrt-v2.a',
                   ninja=venv / 'ninja.exe', xlate=root / 'work' / 'xlate' / 'totk_xlate.exe',
                   temp=root / 'work' / 'install-temp', state=root / 'work' / 'launcher.json')
 

@@ -204,6 +204,10 @@ extern const char rt_port_version[];                       // VERSION at the bui
 // fastball: the game version this exe was built for ("1.0.15", "1.0.20"): tools/data/expected-<version>.json,
 // which tools/build.py picks by the hash of the ExeFS's main. TotK's rt_game_version stays 0 (its probes only).
 extern const char rt_game_build[];
+// fastball: the x86-64 level the generated code was compiled for (tools/build.py --cpu: 3 or 2), checked with the
+// runtime's own against the CPU before main (runtime/mlb/cpucheck.c); cpucheck_log puts both in the log.
+extern const int rt_gen_cpu_level;
+void cpucheck_log(void);
 #define RT_V110 (rt_game_version == 110)                    // 1.1.0: its own boot constants and data slots
 #define RT_V143 (rt_game_version >= 143)
 
